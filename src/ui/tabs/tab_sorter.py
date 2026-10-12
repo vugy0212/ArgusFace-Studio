@@ -579,5 +579,6 @@ def wire_tab_sorter_events(c):
     c['tab_photo_sorter'].select(
         fn=lambda: gr.update(choices=get_sorter_person_choices()),
         inputs=[],
-        outputs=[c['sorter_target_persons']]
+        outputs=[c['sorter_target_persons']],
+        show_progress="hidden"
     )

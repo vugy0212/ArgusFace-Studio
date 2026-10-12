@@ -191,7 +191,7 @@ def create_tab_settings():
             with gr.Column(scale=1):
                 with gr.Accordion("📦 Sigurnosna kopija i vraćanje baze (Backup & Restore ZIP)", open=False, elem_classes=["cyber-accordion"]):
                     gr.Markdown("*Kreirajte cjelovitu ZIP arhivu sustava ili obnovite postojeću bazu i fotografije.*")
-                    with gr.Tabs():
+                    with gr.Tabs(overflow_behavior="wrap"):
                         with gr.TabItem("💾 Izvoz (Export)"):
                             with gr.Row():
                                 btn_export_backup = gr.Button("📦 Kreiraj ZIP arhivu", variant="primary", scale=3)

@@ -534,25 +534,7 @@ def create_tab_live(rec_faces_state):
                     btn_launch_live = gr.Button("Pokreni Live Kameru", variant="primary", scale=2, elem_classes=["btn-industrial-primary"])
                     btn_launch_grid = gr.Button("Pokreni 2×2 Mrežu", variant="primary", scale=2, visible=False, elem_classes=["btn-industrial-primary"])
                     btn_open_snaps_quick = gr.Button("Snimke", variant="secondary", scale=1, elem_classes=["btn-industrial-secondary"])
-                with gr.Row():
-                    live_shortcuts_html = gr.HTML("""
-                    <div class="industrial-shortcuts-card">
-                        <div class="shortcuts-header">
-                            <span class="shortcuts-badge">TIPKOVNICA & MIŠ</span>
-                            <span class="shortcuts-title">Brze kontrole u video prozoru:</span>
-                        </div>
-                        <div class="shortcuts-grid">
-                            <div class="sc-item"><kbd>SPACE</kbd> <span>Pauza / Nastavak</span></div>
-                            <div class="sc-item"><kbd>←</kbd> <kbd>→</kbd> <span>±5s skok</span></div>
-                            <div class="sc-item"><kbd>,</kbd> <kbd>.</kbd> <span>Kadar-po-kadar</span></div>
-                            <div class="sc-item"><kbd>0</kbd>–<kbd>9</kbd> <span>Skok na % videa</span></div>
-                            <div class="sc-item"><kbd>Miš</kbd> <span>Klik / vučenje trake</span></div>
-                            <div class="sc-item"><kbd>F</kbd> <span>AntiSpoof ON/OFF</span></div>
-                            <div class="sc-item"><kbd>M</kbd> <span>Filter (Samo zelena)</span></div>
-                            <div class="sc-item"><kbd>S</kbd> <span>Spremi kadar (Foto)</span></div>
-                        </div>
-                    </div>
-                    """)
+
             
             # 2. Srednji stupac: Vizualni rezultat (cca 42% širine)
             with gr.Column(scale=5, min_width=380, elem_classes=["cyber-card"]):

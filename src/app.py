@@ -65,7 +65,7 @@ def build_app() -> gr.Blocks:
 
         top_header_bar = gr.HTML(get_header_bar_html(), elem_id="top_header_bar")
 
-        with gr.Tabs() as main_tabs:
+        with gr.Tabs(overflow_behavior="wrap") as main_tabs:
             comps_live = create_tab_live(rec_faces_state)
             comps_db = create_tab_database()
             comps_media = create_tab_media()
@@ -97,7 +97,8 @@ def build_app() -> gr.Blocks:
         # Globalni događaji: osvježavanje zaglavlja i početno učitavanje baze
         main_tabs.select(
             fn=get_header_bar_html,
-            outputs=[top_header_bar]
+            outputs=[top_header_bar],
+            show_progress="hidden"
         )
 
         demo_app.load(

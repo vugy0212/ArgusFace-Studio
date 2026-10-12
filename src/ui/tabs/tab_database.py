@@ -1033,17 +1033,17 @@ def on_name_input_blur(name_val):
 
 
 def create_tab_database():
-    single_enroll_state = gr.State({
-        "faces": [],
-        "bgr": None,
-        "selected_idx": 1,
-        "saved_indices": set()
-    })
     with gr.TabItem("Baza Osoba"):
+        single_enroll_state = gr.State({
+            "faces": [],
+            "bgr": None,
+            "selected_idx": 1,
+            "saved_indices": set()
+        })
         with gr.Row():
             # Lijevi stupac: Unos i označavanje na grupnoj slici
             with gr.Column(scale=1):
-                with gr.Tabs():
+                with gr.Tabs(overflow_behavior="wrap"):
                     # Podtab 1: Pojedinačni unos i izrezivanje s grupne slike
                     with gr.TabItem("Pojedinačni unos"):
                         # Mini-avatar kartica odabrane osobe i brzi pretraživač

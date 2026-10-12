@@ -331,7 +331,8 @@ def wire_tab_events_events(c):
     c['tab_events'].select(
         fn=on_events_search,
         inputs=[c['events_search_input']],
-        outputs=events_out_all
+        outputs=events_out_all,
+        show_progress="hidden"
     )
 
     c['events_table'].select(

@@ -1017,6 +1017,20 @@ summary {
     width: 22px !important;
     height: 22px !important;
 }
+
+/* Gladak prijelaz tabova - eliminira FOUC i mikroskopske artefakte */
+.tabitem {
+    animation: tabFadeIn 0.12s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes tabFadeIn {
+    0% {
+        opacity: 0.90;
+    }
+    100% {
+        opacity: 1;
+    }
+}
 """
 
 HEAD_DARK_JS = """

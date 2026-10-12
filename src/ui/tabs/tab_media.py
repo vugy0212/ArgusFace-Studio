@@ -177,7 +177,7 @@ def handle_delete_nvr_segment(video_path):
 
 def create_tab_media():
     with gr.TabItem("📁 Spremljeni Kadrovi i Video Snimke") as tab_saved_media:
-        with gr.Tabs():
+        with gr.Tabs(overflow_behavior="wrap"):
             # POD-TAB 1: SLIKE KADROVA (SNAPSHOTS)
             with gr.TabItem("🖼️ Slike Kadrova (Snapshots)"):
                 with gr.Row():
@@ -392,8 +392,10 @@ def wire_tab_media_events(c):
 
     c['tab_saved_media'].select(
         fn=get_snapshots_ui_data,
-        outputs=[c['snapshots_gallery'], c['snapshots_table'], c['snapshots_info_md'], c['selected_snap_dropdown'], c['selected_snap_preview'], c['selected_snap_info']]
+        outputs=[c['snapshots_gallery'], c['snapshots_table'], c['snapshots_info_md'], c['selected_snap_dropdown'], c['selected_snap_preview'], c['selected_snap_info']],
+        show_progress="hidden"
     ).then(
         fn=get_nvr_archive_ui_data,
-        outputs=[c['nvr_storage_status_md'], c['nvr_archive_table'], c['nvr_video_preview'], c['nvr_selected_info_md']]
+        outputs=[c['nvr_storage_status_md'], c['nvr_archive_table'], c['nvr_video_preview'], c['nvr_selected_info_md']],
+        show_progress="hidden"
     )
