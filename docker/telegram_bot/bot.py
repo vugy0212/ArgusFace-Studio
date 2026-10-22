@@ -79,7 +79,7 @@ logger = logging.getLogger("ArgusFaceBot")
 WAITING_PHOTO_1, WAITING_PHOTO_2 = range(2)
 
 # Conversation states for person enrollment
-ENROLL_PHOTO, ENROLL_NAME, ENROLL_ROLE, ENROLL_NOTES = range(2, 6)
+ENROLL_NAME, ENROLL_ROLE, ENROLL_NOTES, ENROLL_PHOTOS = range(2, 6)
 
 # Conversation states for Admin Panel
 ADMIN_ADD_ID, ADMIN_ADD_NAME, ADMIN_ADD_ROLE, ADMIN_REMOVE_ID, ADMIN_PIN_NEW = range(6, 11)
@@ -186,10 +186,11 @@ def get_main_inline_menu(user_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("➕ Registriraj osobu", callback_data="nav_enroll"),
-            InlineKeyboardButton("📊 Status sustava", callback_data="nav_status")
+            InlineKeyboardButton("🗂️ Baza osoba", callback_data="nav_search_persons")
         ],
         [
-            InlineKeyboardButton("📱 Otvori Mini Web App", callback_data="nav_webapp")
+            InlineKeyboardButton("📊 Status sustava", callback_data="nav_status"),
+            InlineKeyboardButton("📱 Mini Web App", callback_data="nav_webapp")
         ]
     ]
     if is_admin(user_id):
@@ -907,6 +908,16 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data.clear()
 
+    compare_nav_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚖️ Usporedi ponovno (1:1)", callback_data="nav_compare"),
+            InlineKeyboardButton("🔍 Skeniraj lice u bazi", callback_data="nav_search")
+        ],
+        [
+            InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+        ]
+    ])
+
     # Visual biometric card (Option 1)
     card_b64 = None
     if 'res' in locals() and isinstance(res, dict):
@@ -921,7 +932,7 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         photo=io.BytesIO(img_bytes),
                         caption=out_msg,
-                        reply_markup=get_main_inline_menu(chat_id),
+                        reply_markup=compare_nav_markup,
                         parse_mode=constants.ParseMode.MARKDOWN
                     )
                 except Exception:
@@ -929,7 +940,7 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat_id,
                         photo=io.BytesIO(img_bytes),
                         caption=out_msg,
-                        reply_markup=get_main_inline_menu(chat_id),
+                        reply_markup=compare_nav_markup,
                         parse_mode=None
                     )
             else:
@@ -940,27 +951,32 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
                 try:
-                    await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+                    await update.message.reply_text(out_msg, reply_markup=compare_nav_markup, parse_mode=constants.ParseMode.MARKDOWN)
                 except Exception:
-                    await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=None)
+                    await update.message.reply_text(out_msg, reply_markup=compare_nav_markup, parse_mode=None)
             return ConversationHandler.END
         except Exception as e:
             logger.error(f"Greška pri slanju komparacijske kartice: {e}")
 
     try:
-        await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+        await update.message.reply_text(out_msg, reply_markup=compare_nav_markup, parse_mode=constants.ParseMode.MARKDOWN)
     except Exception:
-        await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=None)
+        await update.message.reply_text(out_msg, reply_markup=compare_nav_markup, parse_mode=None)
     return ConversationHandler.END
 
 async def compare_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancels comparison and returns to main menu."""
+    chat_id = update.effective_chat.id
     context.user_data.clear()
-    await update.message.reply_text("❌ Usporedba prekinuta.", reply_markup=get_main_menu(update.effective_chat.id))
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text("❌ **Biometrijska usporedba je prekinuta.**", reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
+        welcome_text = format_welcome_text(update.effective_user.first_name, chat_id)
+        await msg.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 # =========================================================================
-# PERSON ENROLLMENT WORKFLOW (DODAVANJE NOVE OSOBE U BAZU)
+# PERSON ENROLLMENT WORKFLOW (DODAVANJE OSOBE I DO 3 UZORKA LICA)
 # =========================================================================
 
 async def enroll_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -977,48 +993,86 @@ async def enroll_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     context.user_data.clear()
+    context.user_data["enroll_photos"] = []
 
+    prefilled_name = None
     if update.callback_query:
         await update.callback_query.answer()
+        data = update.callback_query.data or ""
+        if data.startswith("nav_enroll_for:"):
+            prefilled_name = data.split(":", 1)[1].strip()
 
     msg = update.effective_message
+
+    if prefilled_name:
+        context.user_data["enroll_name"] = prefilled_name
+        url = f"{ARGUSFACE_API_URL}/api/v1/persons?limit=1&query={requests.utils.quote(prefilled_name)}"
+        try:
+            resp = requests.get(url, headers=get_api_headers(), timeout=5)
+            if resp.status_code == 200:
+                p_list = resp.json().get("persons", [])
+                exact = [p for p in p_list if p.get("name", "").lower() == prefilled_name.lower()]
+                if exact:
+                    context.user_data["enroll_role"] = exact[0].get("role", "standard")
+                    context.user_data["enroll_notes"] = exact[0].get("notes", "")
+        except Exception:
+            pass
+
+        await msg.reply_text(
+            f"📸 **Dodavanje novih fotografija za profil: `{prefilled_name}`**\n\n"
+            "⭐ **Pošaljite 1 do 3 fotografije lica** (idealno različiti kutovi: frontalno, lijevi i desni profil).\n\n"
+            "👉 Pošaljite **prvu fotografiju**:",
+            reply_markup=CANCEL_MARKUP,
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+        return ENROLL_PHOTOS
+
     await msg.reply_text(
-        "➕ **Dodavanje nove osobe u bazu lica**\n\n"
-        "📸 **Korak 1/3:** Molimo pošaljite **fotografiju lica** osobe koju želite registrirati.\n"
-        "*(Savjet: Pošaljite jasnu fotografiju sprijeda, dobro osvijetljenu).*",
-        reply_markup=CANCEL_MARKUP,
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
-    return ENROLL_PHOTO
-
-async def enroll_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receives enrollment photo and asks for person's full name."""
-    photos = update.message.photo
-    if not photos:
-        await update.message.reply_text("⚠️ Molimo pošaljite fotografiju ili kliknite '❌ Odustani'.")
-        return ENROLL_PHOTO
-
-    photo = photos[-1]
-    file = await context.bot.get_file(photo.file_id)
-    photo_bytes = await file.download_as_bytearray()
-    context.user_data["enroll_photo_bytes"] = bytes(photo_bytes)
-
-    await update.message.reply_text(
-        "✅ **Fotografija je zaprimljena!**\n\n"
-        "👤 **Korak 2/3:** Upišite **ime i prezime** osobe (npr. *Ivan Horvat*):",
+        "➕ **Registracija osobe / Dodavanje lica u bazu**\n\n"
+        "👤 **Korak 1/3:** Upišite **ime i prezime** osobe koju želite registrirati:\n"
+        "*(Primjer: Ivan Horvat)*\n\n"
+        "💡 *Možete upisati i ime već postojeće osobe u bazi kako biste joj dodali nove fotografije ili kutove lica.*",
         reply_markup=CANCEL_MARKUP,
         parse_mode=constants.ParseMode.MARKDOWN
     )
     return ENROLL_NAME
 
 async def enroll_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receives person's name and asks for security role."""
-    name_text = update.message.text.strip()
+    """Receives person's name, checks if already in DB, and asks for role or proceeds directly to photos."""
+    name_text = (update.message.text or "").strip()
+    if name_text in ["❌ Odustani", "🔙 Glavni izbornik", "🔙 Povratak u glavni meni", "/cancel", "/menu"]:
+        return await enroll_cancel(update, context)
+
     if not name_text or len(name_text) < 2:
         await update.message.reply_text("⚠️ Ime mora imati najmanje 2 slova. Molimo upišite ime i prezime:")
         return ENROLL_NAME
 
     context.user_data["enroll_name"] = name_text
+    context.user_data["enroll_photos"] = []
+
+    # Check if person already exists in the database
+    url = f"{ARGUSFACE_API_URL}/api/v1/persons?limit=5&query={requests.utils.quote(name_text)}"
+    try:
+        resp = requests.get(url, headers=get_api_headers(), timeout=5)
+        if resp.status_code == 200:
+            persons = resp.json().get("persons", [])
+            exact = [p for p in persons if p.get("name", "").strip().lower() == name_text.lower()]
+            if exact:
+                p = exact[0]
+                context.user_data["existing_person_id"] = p["id"]
+                context.user_data["enroll_role"] = p.get("role", "standard")
+                context.user_data["enroll_notes"] = p.get("notes", "")
+                await update.message.reply_text(
+                    f"ℹ️ Osoba **{name_text}** već postoji u bazi (#{p['id']}, trenutno ima `{p.get('sample_count', 1)}` uzorak/ka lica).\n\n"
+                    f"📸 **Dodavanje novih uzoraka lica (1 do 3 slike)**\n"
+                    f"⭐ *Preporučujemo poslati do 3 slike (frontalno, blagi lijevi i desni profil) za maksimalnu točnost prepoznavanja.*\n\n"
+                    f"👉 Pošaljite **prvu fotografiju**:",
+                    reply_markup=CANCEL_MARKUP,
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+                return ENROLL_PHOTOS
+    except Exception as e:
+        logger.warning(f"Greška pri provjeri postojećeg imena: {e}")
 
     await update.message.reply_text(
         f"🏷️ Odaberite **sigurnosnu ulogu / status** za osobu **{name_text}**:\n\n"
@@ -1032,7 +1086,10 @@ async def enroll_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def enroll_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receives role choice and asks for optional notes."""
-    text = update.message.text.strip()
+    text = (update.message.text or "").strip()
+    if text in ["❌ Odustani", "🔙 Glavni izbornik", "🔙 Povratak u glavni meni", "/cancel", "/menu"]:
+        return await enroll_cancel(update, context)
+
     if "VIP" in text or "vip" in text.lower():
         role = "vip"
     elif "Crna" in text or "crna" in text.lower() or "blacklist" in text.lower():
@@ -1043,33 +1100,135 @@ async def enroll_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["enroll_role"] = role
 
     await update.message.reply_text(
-        "📝 **Korak 3/3 (Opcionalno):** Upišite **dodatne bilješke** (npr. *Odjel prodaje*, *Voditelj*, *Razlog zabrane*...) "
+        "📝 **Korak 2/3 (Opcionalno):** Upišite **dodatne bilješke** (npr. *Odjel prodaje*, *Voditelj*, *Razlog zabrane*...) "
         "ili jednostavno kliknite **'➡️ Preskoči bilješke'**:",
         reply_markup=NOTES_MARKUP,
         parse_mode=constants.ParseMode.MARKDOWN
     )
     return ENROLL_NOTES
 
-async def enroll_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Submits person enrollment to ArgusFace API on host PC."""
+async def enroll_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receives notes and initiates multi-photo upload step."""
     text = (update.message.text or "").strip()
-    if text == "➡️ Preskoči bilješke" or text == "/skip":
+    if text in ["❌ Odustani", "🔙 Glavni izbornik", "🔙 Povratak u glavni meni", "/cancel", "/menu"]:
+        return await enroll_cancel(update, context)
+
+    if text in ["➡️ Preskoči bilješke", "/skip"]:
         notes = "Dodano putem Telegram bota"
     else:
         notes = f"{text} (Telegram bot)"
 
-    photo_bytes = context.user_data.get("enroll_photo_bytes")
+    context.user_data["enroll_notes"] = notes
+    context.user_data["enroll_photos"] = []
+    name = context.user_data.get("enroll_name", "Osoba")
+
+    await update.message.reply_text(
+        f"📸 **Korak 3/3: Fotografije lica za: {name} (1 do 3 slike)**\n\n"
+        f"⭐ **Za maksimalnu biometrijsku točnost idealno je poslati 3 slike:**\n"
+        f"  1️⃣ **Frontalno** (ravno u kameru)\n"
+        f"  2️⃣ **Blagi lijevi profil** (poluprofil)\n"
+        f"  3️⃣ **Blagi desni profil** (poluprofil)\n\n"
+        f"👉 Pošaljite **prvu fotografiju**:",
+        reply_markup=CANCEL_MARKUP,
+        parse_mode=constants.ParseMode.MARKDOWN
+    )
+    return ENROLL_PHOTOS
+
+async def enroll_photo_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collects up to 3 enrollment photos sequentially."""
+    photos = update.message.photo
+    if not photos:
+        await update.message.reply_text("⚠️ Molimo pošaljite fotografiju ili kliknite '❌ Odustani'.")
+        return ENROLL_PHOTOS
+
+    photo = photos[-1]
+    file = await context.bot.get_file(photo.file_id)
+    photo_bytes = await file.download_as_bytearray()
+
+    photos_list = context.user_data.setdefault("enroll_photos", [])
+    photos_list.append(bytes(photo_bytes))
+    count = len(photos_list)
+
+    if count == 1:
+        markup = ReplyKeyboardMarkup([
+            ["✅ Završi i spremi (1 slika)"],
+            ["❌ Odustani"]
+        ], resize_keyboard=True)
+        await update.message.reply_text(
+            "✅ **Slika 1/3 zaprimljena!** 📸\n\n"
+            "💡 *Preporuka:* Pošaljite još 1 ili 2 fotografije (npr. lijevi i desni profil lica) za maksimalnu točnost prepoznavanja.\n\n"
+            "Ili kliknite **'✅ Završi i spremi (1 slika)'** ako je ova jedna slika dovoljna.",
+            reply_markup=markup,
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+        return ENROLL_PHOTOS
+    elif count == 2:
+        markup = ReplyKeyboardMarkup([
+            ["✅ Završi i spremi (2 slike)"],
+            ["❌ Odustani"]
+        ], resize_keyboard=True)
+        await update.message.reply_text(
+            "✅ **Slika 2/3 zaprimljena!** 📸📸\n\n"
+            "💡 Pošaljite još **treću fotografiju** (npr. drugi profil) ili kliknite **'✅ Završi i spremi (2 slike)'**.",
+            reply_markup=markup,
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+        return ENROLL_PHOTOS
+    else:
+        await update.message.reply_text(
+            "✅ **Sve 3 fotografije su zaprimljene!** 📸📸📸\n\n"
+            "⏳ *Obrađujem biometrijske vektore i spremam profil u bazu...*",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+        return await enroll_submit_workflow(update, context)
+
+async def enroll_photo_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles text input while in photo upload mode (e.g. Finish button or Cancel)."""
+    text = (update.message.text or "").strip()
+    if text in ["❌ Odustani", "🔙 Glavni izbornik", "🔙 Povratak u glavni meni", "/cancel", "/menu"]:
+        return await enroll_cancel(update, context)
+
+    if "završi" in text.lower() or "spremi" in text.lower() or text == "/done":
+        photos = context.user_data.get("enroll_photos", [])
+        if not photos:
+            await update.message.reply_text("⚠️ Još niste poslali niti jednu fotografiju. Molimo pošaljite sliku lica:")
+            return ENROLL_PHOTOS
+        await update.message.reply_text(
+            f"⏳ *Obrađujem i spremam {len(photos)} zaprimljene fotografije...*",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+        return await enroll_submit_workflow(update, context)
+
+    count = len(context.user_data.get("enroll_photos", []))
+    btn_label = f"✅ Završi i spremi ({count} slike)" if count > 0 else "❌ Odustani"
+    markup = ReplyKeyboardMarkup([[btn_label], ["❌ Odustani"]], resize_keyboard=True) if count > 0 else CANCEL_MARKUP
+    await update.message.reply_text(
+        "📸 Molimo pošaljite fotografiju lica ili kliknite gumb u nastavku:",
+        reply_markup=markup
+    )
+    return ENROLL_PHOTOS
+
+async def enroll_submit_workflow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Submits collected photos and person details to the ArgusFace API on host PC."""
+    photos = context.user_data.get("enroll_photos", [])
     name = context.user_data.get("enroll_name")
     role = context.user_data.get("enroll_role", "standard")
+    notes = context.user_data.get("enroll_notes", "Dodano putem Telegram bota")
 
-    if not photo_bytes or not name:
-        await update.message.reply_text("❌ Došlo je do greške u sesiji. Molimo pokušajte ponovno.", reply_markup=get_main_menu(update.effective_chat.id))
+    chat_id = update.effective_chat.id
+    if not photos or not name:
+        context.user_data.clear()
+        await update.message.reply_text("❌ Došlo je do greške u sesiji (nedostaje slika ili ime).", reply_markup=ReplyKeyboardRemove())
+        welcome_text = format_welcome_text(update.effective_user.first_name, chat_id)
+        await update.message.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
         return ConversationHandler.END
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
 
     url = f"{ARGUSFACE_API_URL}/api/v1/enroll"
-    files = {"image": ("enroll.jpg", photo_bytes, "image/jpeg")}
+    files = [("images", (f"enroll_{i+1}.jpg", pb, "image/jpeg")) for i, pb in enumerate(photos)]
     data = {
         "name": name,
         "role": role,
@@ -1077,7 +1236,7 @@ async def enroll_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     try:
-        resp = requests.post(url, files=files, data=data, headers=get_api_headers(), timeout=20)
+        resp = requests.post(url, files=files, data=data, headers=get_api_headers(), timeout=35)
         if resp.status_code == 200:
             res = resp.json()
             if not res.get("success"):
@@ -1085,7 +1244,8 @@ async def enroll_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 p_name = res.get("name")
                 p_role = res.get("role")
-                total_s = res.get("total_samples", 1)
+                added_count = res.get("added_samples_count", len(photos))
+                total_s = res.get("total_samples", added_count)
                 age = res.get("age", "-")
                 gender = res.get("gender", "-")
                 is_real = res.get("is_real", True)
@@ -1103,10 +1263,10 @@ async def enroll_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"👤 **Ime i prezime:** `{p_name}`\n"
                     f"🏷️ **Status:** {role_badge}\n"
                     f"📝 **Bilješke:** `{notes}`\n"
-                    f"📸 **Ukupno uzoraka lica:** `{total_s}`\n"
+                    f"📸 **Uspješno spremljeno slika:** `{added_count}` (Ukupno u profilu: `{total_s}`)\n"
                     f"📐 **Procjena lica:** `~{age} god, {gender}`\n"
                     f"🛡️ **Liveness provjera:** `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({liveness_conf}%)`\n\n"
-                    f"✨ *Vektorski FAISS indeks na računalu je automatski ažuriran.* Osoba je odmah prepoznatljiva na kamerama i pri pretrazi!"
+                    f"✨ *Vektorski FAISS indeks na računalu je automatski ažuriran.* Lice je odmah spremno za prepoznavanje na kamerama i pri pretrazi!"
                 )
         else:
             out_msg = f"⚠️ Greška API poslužitelja: HTTP {resp.status_code} ({resp.text})"
@@ -1118,15 +1278,30 @@ async def enroll_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         out_msg = f"❌ Greška pri registraciji: {str(e)}"
 
-    chat_id = update.effective_chat.id
     context.user_data.clear()
-    await update.message.reply_text(out_msg, reply_markup=get_main_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+
+    nav_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕ Registriraj novo lice", callback_data="nav_enroll"),
+            InlineKeyboardButton("🔍 Provjeri lice u bazi", callback_data="nav_search")
+        ],
+        [
+            InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+        ]
+    ])
+
+    await update.message.reply_text(out_msg, reply_markup=nav_markup, parse_mode=constants.ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 async def enroll_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancels enrollment and returns to main menu."""
+    """Cancels enrollment and smoothly returns to main menu."""
+    chat_id = update.effective_chat.id
     context.user_data.clear()
-    await update.message.reply_text("❌ Dodavanje nove osobe je prekinuto.", reply_markup=get_main_menu(update.effective_chat.id))
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text("❌ **Registracija lica je prekinuta.**", reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
+        welcome_text = format_welcome_text(update.effective_user.first_name, chat_id)
+        await msg.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 # =========================================================================
@@ -1221,6 +1396,35 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         out_msg = f"❌ Greška pri pretrazi baze: {str(e)}"
 
+    # Smart inline navigation based on search results
+    matched_person = None
+    if 'res' in locals() and isinstance(res, dict):
+        for f in res.get("results", []):
+            if f.get("matched") and f.get("person_name"):
+                matched_person = str(f.get("person_name")).replace("_", " ")
+                break
+
+    if matched_person:
+        search_nav_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"📸 Dodaj slike ({matched_person[:14]})", callback_data=f"nav_enroll_for:{matched_person}"),
+                InlineKeyboardButton("🔍 Skeniraj ponovno", callback_data="nav_search")
+            ],
+            [
+                InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+            ]
+        ])
+    else:
+        search_nav_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ Registriraj ovo lice", callback_data="nav_enroll"),
+                InlineKeyboardButton("🔍 Skeniraj ponovno", callback_data="nav_search")
+            ],
+            [
+                InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+            ]
+        ])
+
     # Visual biometric card (Option 1)
     card_b64 = None
     if 'res' in locals() and isinstance(res, dict):
@@ -1235,7 +1439,7 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                         chat_id=chat_id,
                         photo=io.BytesIO(img_bytes),
                         caption=out_msg,
-                        reply_markup=get_main_inline_menu(chat_id),
+                        reply_markup=search_nav_markup,
                         parse_mode=constants.ParseMode.MARKDOWN
                     )
                 except Exception:
@@ -1243,7 +1447,7 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                         chat_id=chat_id,
                         photo=io.BytesIO(img_bytes),
                         caption=out_msg,
-                        reply_markup=get_main_inline_menu(chat_id),
+                        reply_markup=search_nav_markup,
                         parse_mode=None
                     )
             else:
@@ -1254,17 +1458,17 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
                 try:
-                    await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+                    await update.message.reply_text(out_msg, reply_markup=search_nav_markup, parse_mode=constants.ParseMode.MARKDOWN)
                 except Exception:
-                    await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=None)
+                    await update.message.reply_text(out_msg, reply_markup=search_nav_markup, parse_mode=None)
             return
         except Exception as e:
             logger.error(f"Greška pri slanju biometrijske kartice: {e}")
 
     try:
-        await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+        await update.message.reply_text(out_msg, reply_markup=search_nav_markup, parse_mode=constants.ParseMode.MARKDOWN)
     except Exception:
-        await update.message.reply_text(out_msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=None)
+        await update.message.reply_text(out_msg, reply_markup=search_nav_markup, parse_mode=None)
 
 async def search_button_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Responds when user clicks the '🔍 Provjeri u bazi' button."""
@@ -1307,17 +1511,27 @@ async def perform_person_search(update: Update, context: ContextTypes.DEFAULT_TY
                 msg = (
                     f"❌ **Osoba se NE nalazi u bazi podataka.**\n\n"
                     f"Nije pronađen niti jedan zapis za pojam: `{query_clean}`\n\n"
-                    f"💡 Možete registrirati ovu osobu putem opcije **➕ Dodaj lice** u izborniku."
+                    f"💡 Možete registrirati ovu osobu putem gumba u nastavku:"
                 )
+                search_not_found_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(f"➕ Registriraj '{query_clean[:14]}'", callback_data=f"nav_enroll_for:{query_clean}"),
+                        InlineKeyboardButton("🔍 Pretraži ponovno", callback_data="nav_search_persons")
+                    ],
+                    [
+                        InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+                    ]
+                ])
                 try:
-                    await update.message.reply_text(msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+                    await update.message.reply_text(msg, reply_markup=search_not_found_markup, parse_mode=constants.ParseMode.MARKDOWN)
                 except Exception:
-                    await update.message.reply_text(msg, reply_markup=get_main_inline_menu(chat_id), parse_mode=None)
+                    await update.message.reply_text(msg, reply_markup=search_not_found_markup, parse_mode=None)
                 return
 
             # Single match with thumbnail
             if total == 1 and persons[0].get("thumbnail_base64"):
                 p = persons[0]
+                p_name = p.get("name", "Osoba")
                 role_label = "STANDARD"
                 if p.get("role") == "blacklist":
                     role_label = "🚨 CRNA LISTA"
@@ -1336,13 +1550,23 @@ async def perform_person_search(update: Update, context: ContextTypes.DEFAULT_TY
                 if p.get("created_at"):
                     caption += f"📅 **Registrirano:** `{p['created_at'][:10]}`\n"
 
+                single_match_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📸 Dodaj slike (1-3)", callback_data=f"nav_enroll_for:{p_name}"),
+                        InlineKeyboardButton("🔍 Pretraži ponovno", callback_data="nav_search_persons")
+                    ],
+                    [
+                        InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+                    ]
+                ])
+
                 img_bytes = base64.b64decode(p["thumbnail_base64"])
                 try:
                     await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=io.BytesIO(img_bytes),
                         caption=caption,
-                        reply_markup=get_main_inline_menu(chat_id),
+                        reply_markup=single_match_markup,
                         parse_mode=constants.ParseMode.MARKDOWN
                     )
                 except Exception:
@@ -1350,7 +1574,7 @@ async def perform_person_search(update: Update, context: ContextTypes.DEFAULT_TY
                         chat_id=chat_id,
                         photo=io.BytesIO(img_bytes),
                         caption=caption,
-                        reply_markup=get_main_inline_menu(chat_id),
+                        reply_markup=single_match_markup,
                         parse_mode=None
                     )
                 return
@@ -1365,15 +1589,25 @@ async def perform_person_search(update: Update, context: ContextTypes.DEFAULT_TY
             if total > 10:
                 lines.append(f"\n_... i još {total - 10} osoba u bazi. Upišite točnije ime za detalje._")
 
+            multi_match_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔍 Pretraži ponovno", callback_data="nav_search_persons"),
+                    InlineKeyboardButton("➕ Registriraj osobu", callback_data="nav_enroll")
+                ],
+                [
+                    InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
+                ]
+            ])
+
             out_text = "\n".join(lines)
             try:
-                await update.message.reply_text(out_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+                await update.message.reply_text(out_text, reply_markup=multi_match_markup, parse_mode=constants.ParseMode.MARKDOWN)
             except Exception:
-                await update.message.reply_text(out_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=None)
+                await update.message.reply_text(out_text, reply_markup=multi_match_markup, parse_mode=None)
         else:
-            await update.message.reply_text(f"⚠️ Greška API poslužitelja: HTTP {resp.status_code}")
+            await update.message.reply_text(f"⚠️ Greška API poslužitelja: HTTP {resp.status_code}", reply_markup=get_back_to_main_menu())
     except Exception as e:
-        await update.message.reply_text(f"❌ Greška pri pretrazi baze: {str(e)}")
+        await update.message.reply_text(f"❌ Greška pri pretrazi baze: {str(e)}", reply_markup=get_back_to_main_menu())
 
 async def search_persons_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command /trazi or /osobe <ime> to search persons in the database."""
@@ -1439,7 +1673,7 @@ async def handle_general_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Handle awaiting person search text
     if context.user_data.get("awaiting_person_search"):
         context.user_data.pop("awaiting_person_search", None)
-        if text not in ["❌ Odustani", "🔙 Povratak u glavni meni"]:
+        if text not in ["❌ Odustani", "🔙 Povratak u glavni meni", "🔙 Glavni izbornik", "/cancel", "/menu"]:
             await perform_person_search(update, context, text)
             return
 
@@ -1813,16 +2047,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    if data == "admin_search_persons":
-        if not is_admin(chat_id):
-            await safe_edit_or_reply(query, "⛔ Nemate administratorska prava.", reply_markup=get_back_to_main_menu())
-            return
+    if data in ("nav_search_persons", "admin_search_persons"):
         context.user_data["awaiting_person_search"] = True
-        await query.message.reply_text(
+        await safe_edit_or_reply(
+            query,
             "🗂️ **Pretraga baze registriranih osoba**\n\n"
             "Upišite ime ili dio imena osobe koju želite provjeriti u bazi (ili pošaljite `sve` za pregled baze):\n\n"
-            "💡 _Možete u bilo kojem trenutku koristiti i brzu naredbu:_ `/trazi <ime>`",
-            reply_markup=CANCEL_MARKUP,
+            "💡 _Možete u bilo kojem trenutku poslati ime osobe, ili koristiti brzu naredbu:_ `/trazi <ime>`",
+            reply_markup=get_back_to_main_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
         return
@@ -1940,19 +2172,16 @@ def main():
         ]
     )
 
-    # Person enrollment conversation handler (Dodaj novu osobu)
+    # Person enrollment conversation handler (Dodaj novu osobu i 1-3 fotografije)
     enroll_conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(enroll_start, pattern="^nav_enroll$"),
+            CallbackQueryHandler(enroll_start, pattern="^nav_enroll_for:"),
             MessageHandler(filters.Regex("^➕ Registriraj osobu$"), enroll_start),
             MessageHandler(filters.Regex("^➕ Dodaj novu osobu$"), enroll_start),
             CommandHandler("enroll", enroll_start)
         ],
         states={
-            ENROLL_PHOTO: [
-                MessageHandler(filters.PHOTO, enroll_photo),
-                MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
-            ],
             ENROLL_NAME: [
                 MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_name),
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
@@ -1962,13 +2191,21 @@ def main():
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
             ],
             ENROLL_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_finish),
+                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_notes),
+                MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
+            ],
+            ENROLL_PHOTOS: [
+                MessageHandler(filters.PHOTO, enroll_photo_received),
+                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_photo_text_handler),
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
             ]
         },
         fallbacks=[
             CommandHandler("cancel", enroll_cancel),
-            MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
+            MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel),
+            MessageHandler(filters.Regex("^🔙 (Povratak u glavni meni|Glavni izbornik)$"), enroll_cancel),
+            CommandHandler("menu", enroll_cancel),
+            CommandHandler("start", enroll_cancel)
         ]
     )
 

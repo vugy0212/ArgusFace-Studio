@@ -584,15 +584,16 @@ async def search_database(
 @app.post("/api/v1/persons/enroll")
 @app.post("/api/v1/person/add")
 async def enroll_person(
-    image: UploadFile = File(...),
+    images: Optional[List[UploadFile]] = File(None),
+    image: Optional[UploadFile] = File(None),
     name: str = Form(...),
     role: str = Form("standard"),
     notes: str = Form(""),
     _: bool = Depends(verify_api_key)
 ):
     """
-    Dodaje novu osobu ili dodatni uzorak lica postojećoj osobi u ArgusFace bazu.
-    Automatski ekstrahira biometrijski embedding, sprema crop i originalnu sliku,
+    Dodaje novu osobu ili dodatne uzorke lica (1 do N fotografija) postojećoj osobi u ArgusFace bazu.
+    Automatski ekstrahira biometrijske embeddinge, sprema cropove i originalne slike,
     te ažurira FAISS / NumPy indeks.
     """
     clean_name = name.strip()
@@ -605,20 +606,16 @@ async def enroll_person(
 
     clean_notes = (notes or "").strip()
 
-    contents = await image.read()
-    img_bgr = decode_image_bytes(contents)
-    if img_bgr is None:
-        raise HTTPException(status_code=400, detail="Neispravan format slike. Pošaljite JPEG ili PNG sliku.")
+    upload_files = []
+    if images:
+        for f in images:
+            if f and f.filename:
+                upload_files.append(f)
+    if image and image.filename and image not in upload_files:
+        upload_files.append(image)
 
-    faces = face_engine.extract_faces_from_image(img_bgr, with_attributes=True, check_spoofing=True)
-    if not faces:
-        return {
-            "success": False,
-            "error": "Na poslanoj slici nije detektirano niti jedno lice. Pošaljite jasniju fotografiju."
-        }
-
-    # Ako je detektirano više lica, odaberi najveće lice (površina bbox-a)
-    target_face = max(faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+    if not upload_files:
+        raise HTTPException(status_code=400, detail="Molimo pošaljite barem jednu fotografiju lica.")
 
     # Dohvati ili kreiraj osobu u SQLite bazi
     person_id = db.get_or_create_person(clean_name, clean_notes, role=clean_role)
@@ -627,20 +624,54 @@ async def enroll_person(
     except Exception:
         pass
 
-    # Trajno spremi originalnu sliku i crop lica
-    orig_path = save_image_dedup(img_bgr, UPLOADS_DIR, prefix="orig_bot")
-    crop_filename = f"crop_{person_id}_{uuid.uuid4().hex[:8]}.jpg"
-    crop_path = os.path.join(CROPS_DIR, crop_filename)
-    imwrite_unicode(crop_path, target_face["crop_bgr"])
+    added_samples = []
+    failed_reasons = []
+    last_face = None
 
-    # Dodaj uzorak lica (automatski poziva callback za osvježavanje indeksa)
-    sample_id = db.add_face_sample(
-        person_id=person_id,
-        image_path=orig_path,
-        crop_path=crop_path,
-        embedding=target_face["embedding"],
-        confidence=target_face.get("confidence", 1.0)
-    )
+    for idx, f in enumerate(upload_files):
+        try:
+            contents = await f.read()
+            img_bgr = decode_image_bytes(contents)
+            if img_bgr is None:
+                failed_reasons.append(f"Slika #{idx+1}: neispravan format")
+                continue
+
+            faces = face_engine.extract_faces_from_image(img_bgr, with_attributes=True, check_spoofing=True)
+            if not faces:
+                failed_reasons.append(f"Slika #{idx+1}: lice nije pronađeno")
+                continue
+
+            target_face = max(faces, key=lambda fc: (fc["bbox"][2] - fc["bbox"][0]) * (fc["bbox"][3] - fc["bbox"][1]))
+            last_face = target_face
+
+            orig_path = save_image_dedup(img_bgr, UPLOADS_DIR, prefix="orig_bot")
+            crop_filename = f"crop_{person_id}_{uuid.uuid4().hex[:8]}.jpg"
+            crop_path = os.path.join(CROPS_DIR, crop_filename)
+            imwrite_unicode(crop_path, target_face["crop_bgr"])
+
+            sample_id = db.add_face_sample(
+                person_id=person_id,
+                image_path=orig_path,
+                crop_path=crop_path,
+                embedding=target_face["embedding"],
+                confidence=target_face.get("confidence", 1.0)
+            )
+            added_samples.append({
+                "sample_id": sample_id,
+                "crop_path": crop_path,
+                "age": int(target_face["age"]) if target_face.get("age") is not None else None,
+                "gender": str(target_face.get("gender") or ""),
+                "is_real": bool(target_face.get("is_real", True)),
+                "liveness_conf": round(float(target_face.get("liveness_conf", 1.0)), 2)
+            })
+        except Exception as e:
+            failed_reasons.append(f"Slika #{idx+1}: greška {e}")
+
+    if not added_samples:
+        return {
+            "success": False,
+            "error": "Na poslanim slikama nije uspješno detektirano niti jedno lice: " + "; ".join(failed_reasons)
+        }
 
     all_samples = db.get_person_samples(person_id)
 
@@ -650,13 +681,16 @@ async def enroll_person(
         "name": clean_name,
         "role": clean_role,
         "notes": clean_notes,
-        "sample_id": sample_id,
+        "added_samples_count": len(added_samples),
         "total_samples": len(all_samples),
-        "age": int(target_face["age"]) if target_face.get("age") is not None else None,
-        "gender": str(target_face.get("gender") or ""),
-        "is_real": bool(target_face.get("is_real", True)),
-        "liveness_conf": round(float(target_face.get("liveness_conf", 1.0)), 2),
-        "faces_detected_count": len(faces)
+        "sample_id": added_samples[0]["sample_id"] if added_samples else None,
+        "samples": added_samples,
+        "failed_reasons": failed_reasons,
+        "age": int(last_face["age"]) if last_face and last_face.get("age") is not None else None,
+        "gender": str(last_face.get("gender") or "") if last_face else "",
+        "is_real": bool(last_face.get("is_real", True)) if last_face else True,
+        "liveness_conf": round(float(last_face.get("liveness_conf", 1.0)), 2) if last_face else 1.0,
+        "faces_detected_count": len(added_samples)
     }
 
 # =========================================================================
