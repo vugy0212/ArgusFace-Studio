@@ -141,6 +141,19 @@ def launch_app(desktop: bool = True, port: int = 7860):
     except Exception as e:
         print(f"[GDPR RETENTION] Greška pri startnoj provjeri: {e}")
 
+    # Automatsko pokretanje lokalnog API poslužitelja (za Docker Telegram bot) ako je omogućeno
+    try:
+        api_cfg = config.get_api_config()
+        if api_cfg.get("enabled"):
+            from src import api_server
+            api_server.start_api_service_background(
+                host=api_cfg.get("host", "0.0.0.0"),
+                port=api_cfg.get("port", 5055)
+            )
+            print(f"[API SERVER] Lokalni API poslužitelj pokrenut na portu {api_cfg.get('port', 5055)}")
+    except Exception as e:
+        print(f"[API SERVER] Greška pri startu API servisa: {e}")
+
     has_webview = False
     if desktop:
         try:

@@ -343,4 +343,57 @@ def save_email_config(
     cfg["email_cooldown_min"] = max(1, int(cooldown_min))
     return save_settings(cfg)
 
+def get_api_config() -> dict:
+    """Returns local API service configuration for external integrations (Docker, Telegram bot, etc.)."""
+    cfg = load_settings()
+    return {
+        "enabled": bool(cfg.get("api_enabled", False)),
+        "host": str(cfg.get("api_host", "0.0.0.0")).strip(),
+        "port": int(cfg.get("api_port", 5055)),
+        "api_key": str(cfg.get("api_key", "")).strip(),
+    }
 
+def save_api_config(enabled: bool, port: int = 5055, api_key: str = "", host: str = "0.0.0.0") -> bool:
+    """Saves local API service configuration to settings."""
+    cfg = load_settings()
+    cfg["api_enabled"] = bool(enabled)
+    cfg["api_host"] = str(host).strip() or "0.0.0.0"
+    cfg["api_port"] = int(port) if port else 5055
+    cfg["api_key"] = str(api_key or "").strip()
+    return save_settings(cfg)
+
+BOT_CONFIG_PATH = os.path.join(DATA_DIR, "bot_users.json")
+
+def get_bot_config() -> dict:
+    """Returns Telegram Bot access control and user authorization settings."""
+    default_cfg = {
+        "pin": "121977",
+        "session_timeout_minutes": 30,
+        "admin_chat_ids": [],
+        "allowed_users": []
+    }
+    if not os.path.exists(BOT_CONFIG_PATH):
+        try:
+            with open(BOT_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(default_cfg, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+        return default_cfg
+    try:
+        with open(BOT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            for k, v in default_cfg.items():
+                if k not in data:
+                    data[k] = v
+            return data
+    except Exception:
+        return default_cfg
+
+def save_bot_config(cfg: dict) -> bool:
+    """Saves Telegram Bot access control and user authorization settings."""
+    try:
+        with open(BOT_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False

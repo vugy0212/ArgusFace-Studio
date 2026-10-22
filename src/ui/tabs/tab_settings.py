@@ -114,6 +114,98 @@ def handle_test_telegram(token, chat_id):
     except Exception as e:
         return f"❌ Greška pri testiranju Telegrama: {e}"
 
+# ---------------- LOCAL API SERVICE HANDLERS ----------------
+def handle_save_api_config(enabled, port, api_key):
+    try:
+        port_int = int(port or 5055)
+        config.save_api_config(enabled=enabled, port=port_int, api_key=api_key)
+        try:
+            from src import api_server
+            if enabled:
+                ok, msg = api_server.start_api_service_background(host="0.0.0.0", port=port_int)
+                return f"✅ **API postavke su spremljene!** {msg}\n\n🌐 Adresa za Docker / vanjske klijente: `http://host.docker.internal:{port_int}`"
+            else:
+                ok, msg = api_server.stop_api_service()
+                return "ℹ️ **Lokalni API poslužitelj je isključen.** Postavke su spremljene."
+        except Exception as e:
+            return f"✅ Postavke su spremljene, ali je došlo do greške pri promjeni servisa: {e}"
+    except Exception as e:
+        return f"❌ Greška pri spremanju API postavki: {e}"
+
+# ---------------- TELEGRAM BOT ADMIN & USER HANDLERS ----------------
+def get_bot_users_dataframe_data():
+    try:
+        cfg = config.get_bot_config()
+        users = cfg.get("allowed_users", [])
+        data = []
+        for u in users:
+            role = "👑 Admin" if u.get("role") == "admin" else "👤 Korisnik"
+            data.append([str(u.get("chat_id", "")), u.get("name", ""), role, u.get("added_at", "-")])
+        return data
+    except Exception:
+        return []
+
+def handle_save_bot_security(pin, timeout):
+    try:
+        p = str(pin or "").strip()
+        if len(p) < 4:
+            return "⚠️ PIN mora sadržavati najmanje 4 znaka.", get_bot_users_dataframe_data()
+        cfg = config.get_bot_config()
+        cfg["pin"] = p
+        cfg["session_timeout_minutes"] = max(1, int(timeout or 30))
+        config.save_bot_config(cfg)
+        return "✅ **Sigurnosni PIN i timeout su uspješno spremljeni!**", get_bot_users_dataframe_data()
+    except Exception as e:
+        return f"❌ Greška: {e}", get_bot_users_dataframe_data()
+
+def handle_add_bot_user(chat_id, name, role):
+    try:
+        cid_str = str(chat_id or "").strip()
+        if not cid_str.isdigit():
+            return "⚠️ Chat ID mora biti cijeli broj (npr. 123456789).", get_bot_users_dataframe_data(), ""
+        cid = int(cid_str)
+        n = str(name or "").strip() or "Korisnik"
+        r = str(role or "user").strip().lower()
+        
+        cfg = config.get_bot_config()
+        allowed = [u for u in cfg.get("allowed_users", []) if u.get("chat_id") != cid]
+        admin_ids = set(cfg.get("admin_chat_ids", []))
+        
+        if r == "admin":
+            admin_ids.add(cid)
+        else:
+            admin_ids.discard(cid)
+            
+        from datetime import datetime
+        allowed.append({
+            "chat_id": cid,
+            "name": n,
+            "role": r,
+            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        cfg["allowed_users"] = allowed
+        cfg["admin_chat_ids"] = list(admin_ids)
+        config.save_bot_config(cfg)
+        return f"✅ Korisnik '{n}' ({cid}) je uspješno dodan!", get_bot_users_dataframe_data(), ""
+    except Exception as e:
+        return f"❌ Greška: {e}", get_bot_users_dataframe_data(), ""
+
+def handle_remove_bot_user(chat_id):
+    try:
+        cid_str = str(chat_id or "").strip()
+        if not cid_str.isdigit():
+            return "⚠️ Unesite valjani brojčani Chat ID.", get_bot_users_dataframe_data(), ""
+        cid = int(cid_str)
+        cfg = config.get_bot_config()
+        cfg["allowed_users"] = [u for u in cfg.get("allowed_users", []) if u.get("chat_id") != cid]
+        admin_ids = set(cfg.get("admin_chat_ids", []))
+        admin_ids.discard(cid)
+        cfg["admin_chat_ids"] = list(admin_ids)
+        config.save_bot_config(cfg)
+        return f"🗑️ Korisnik {cid} je uspješno uklonjen.", get_bot_users_dataframe_data(), ""
+    except Exception as e:
+        return f"❌ Greška: {e}", get_bot_users_dataframe_data(), ""
+
 # ---------------- EMAIL NOTIFICATION HANDLERS ----------------
 def handle_save_email_config(enabled, host, port, enc_mode, sender, password, recipients, notify_bl, notify_spoof, notify_vip, cooldown):
     try:
@@ -323,6 +415,78 @@ def create_tab_settings():
                         btn_test_telegram = gr.Button("📨 Pošalji testnu poruku", variant="secondary", scale=2, elem_classes=["btn-cyber-secondary"])
                     telegram_status_md = gr.Markdown("")
 
+                with gr.Group(elem_classes=["cyber-card", "api-card"]):
+                    gr.Markdown("#### 🌐 Lokalni API Poslužitelj (za Docker Telegram Bot & Vanjske Integracije)")
+                    gr.Markdown(
+                        "Omogućuje sigurno povezivanje vašeg **24/7 Docker Telegram Bota** ili vanjskih servisa s ArgusFace AI motorom. "
+                        "Kada je omogućeno, računalo sluša zahtjeve za biometrijsku usporedbu i pretragu baze na odabranom portu."
+                    )
+                    init_api = config.get_api_config()
+                    api_enabled_chk = gr.Checkbox(
+                        label="🚀 Omogući lokalni API poslužitelj na ovom računalu",
+                        value=init_api["enabled"],
+                        interactive=True
+                    )
+                    with gr.Row():
+                        api_port_input = gr.Number(
+                            label="Mrežni port poslužitelja",
+                            value=init_api["port"],
+                            precision=0,
+                            scale=1,
+                            info="Zadano: 5055 (Poveznica: http://host.docker.internal:5055)"
+                        )
+                        api_key_input = gr.Textbox(
+                            label="Sigurnosni API ključ (Opcionalno)",
+                            placeholder="Ostavite prazno za nesmetan rad u lokalnoj mreži i Dockeru",
+                            value=init_api["api_key"],
+                            type="password",
+                            scale=2,
+                            info="Ako postavite ključ, bot ga mora slati u zaglavlju X-API-Key"
+                        )
+                    with gr.Row():
+                        btn_save_api_config = gr.Button("💾 Spremi i primijeni API postavke", variant="primary", scale=2, elem_classes=["btn-cyber-primary"])
+                    api_status_md = gr.Markdown("")
+
+                    with gr.Accordion("👥 Upravljanje ovlaštenim Telegram korisnicima bota (Admin Panel)", open=False):
+                        gr.Markdown(
+                            "Ovdje možete odrediti tko ima pristup 24/7 Telegram botu, postaviti sigurnosni PIN, "
+                            "dodijeliti uloge (Administrator / Običan korisnik) ili ukinuti pristup."
+                        )
+                        init_bot_cfg = config.get_bot_config()
+                        with gr.Row():
+                            bot_pin_input = gr.Textbox(
+                                label="Sigurnosni PIN bota",
+                                value=init_bot_cfg.get("pin", "121977"),
+                                scale=2
+                            )
+                            bot_timeout_input = gr.Number(
+                                label="Istek neaktivne sesije (minuta)",
+                                value=init_bot_cfg.get("session_timeout_minutes", 30),
+                                precision=0,
+                                scale=1
+                            )
+                            btn_save_bot_security = gr.Button("💾 Spremi PIN i timeout", scale=1)
+
+                        bot_users_table = gr.Dataframe(
+                            headers=["Chat ID", "Ime / Opis", "Uloga", "Dodano"],
+                            datatype=["str", "str", "str", "str"],
+                            value=get_bot_users_dataframe_data(),
+                            interactive=False,
+                            label="Popis ovlaštenih Telegram korisnika bota"
+                        )
+
+                        with gr.Row():
+                            new_chat_id_input = gr.Textbox(label="Novi Chat ID", placeholder="npr. 123456789", scale=2)
+                            new_user_name_input = gr.Textbox(label="Ime korisnika", placeholder="npr. Marko - Zaštitar", scale=2)
+                            new_user_role_dropdown = gr.Dropdown(label="Uloga", choices=["user", "admin"], value="user", scale=1)
+                            btn_add_bot_user = gr.Button("➕ Dodaj korisnika", variant="primary", scale=1)
+
+                        with gr.Row():
+                            del_chat_id_input = gr.Textbox(label="Ukloni Chat ID", placeholder="Upišite Chat ID za uklanjanje", scale=3)
+                            btn_del_bot_user = gr.Button("🗑️ Ukloni korisnika", variant="stop", scale=1)
+
+                        bot_admin_status_md = gr.Markdown("")
+
                 with gr.Group(elem_classes=["cyber-card", "email-card"]):
                     gr.Markdown("#### 📧 E-mail Sigurnosna Upozorenja (SMTP)")
                     gr.Markdown(
@@ -459,6 +623,22 @@ def create_tab_settings():
         "btn_save_telegram_config": btn_save_telegram_config,
         "btn_test_telegram": btn_test_telegram,
         "telegram_status_md": telegram_status_md,
+        "api_enabled_chk": api_enabled_chk,
+        "api_port_input": api_port_input,
+        "api_key_input": api_key_input,
+        "btn_save_api_config": btn_save_api_config,
+        "api_status_md": api_status_md,
+        "bot_pin_input": bot_pin_input,
+        "bot_timeout_input": bot_timeout_input,
+        "btn_save_bot_security": btn_save_bot_security,
+        "bot_users_table": bot_users_table,
+        "new_chat_id_input": new_chat_id_input,
+        "new_user_name_input": new_user_name_input,
+        "new_user_role_dropdown": new_user_role_dropdown,
+        "btn_add_bot_user": btn_add_bot_user,
+        "del_chat_id_input": del_chat_id_input,
+        "btn_del_bot_user": btn_del_bot_user,
+        "bot_admin_status_md": bot_admin_status_md,
         "email_enabled_chk": email_enabled_chk,
         "email_smtp_host": email_smtp_host,
         "email_smtp_port": email_smtp_port,
@@ -533,6 +713,34 @@ def wire_tab_settings_events(c):
         fn=handle_test_telegram,
         inputs=[c['telegram_token_input'], c['telegram_chat_id_input']],
         outputs=[c['telegram_status_md']]
+    )
+
+    c['btn_save_api_config'].click(
+        fn=handle_save_api_config,
+        inputs=[
+            c['api_enabled_chk'],
+            c['api_port_input'],
+            c['api_key_input']
+        ],
+        outputs=[c['api_status_md']]
+    )
+
+    c['btn_save_bot_security'].click(
+        fn=handle_save_bot_security,
+        inputs=[c['bot_pin_input'], c['bot_timeout_input']],
+        outputs=[c['bot_admin_status_md'], c['bot_users_table']]
+    )
+
+    c['btn_add_bot_user'].click(
+        fn=handle_add_bot_user,
+        inputs=[c['new_chat_id_input'], c['new_user_name_input'], c['new_user_role_dropdown']],
+        outputs=[c['bot_admin_status_md'], c['bot_users_table'], c['new_chat_id_input']]
+    )
+
+    c['btn_del_bot_user'].click(
+        fn=handle_remove_bot_user,
+        inputs=[c['del_chat_id_input']],
+        outputs=[c['bot_admin_status_md'], c['bot_users_table'], c['del_chat_id_input']]
     )
 
     c['btn_save_email_config'].click(

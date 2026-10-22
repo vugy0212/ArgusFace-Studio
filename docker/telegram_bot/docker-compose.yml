@@ -1,0 +1,22 @@
+services:
+  argusface-telegram-bot:
+    build: .
+    container_name: argusface-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./bot.py:/app/bot.py:ro
+      - ./tunnel_data:/data:ro
+
+  argusface-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: argusface-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://host.docker.internal:5055 --logfile /data/tunnel.log
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./tunnel_data:/data:rw

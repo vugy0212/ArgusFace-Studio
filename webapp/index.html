@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ArgusFace Studio — Biometric Mobile App</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Telegram Web App SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+    <div id="app" class="app-container">
+        <!-- Top App Bar -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="brand-icon">
+                    <span class="pulse-ring"></span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>ARGUS<span>FACE</span></h1>
+                    <span class="brand-badge" id="headerEngineBadge">AI ONLINE</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button class="icon-btn" id="btnRefreshHeader" title="Osvježi status">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                        <path d="M3 3v5h5"/>
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+                        <path d="M16 21h5v-5"/>
+                    </svg>
+                </button>
+                <button class="icon-btn lock-btn" id="btnLockApp" title="Zaključaj sesiju">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Screen Content Area -->
+        <main class="app-content">
+            <!-- TAB 1: 🔍 FOTO SKENIRANJE & PRETRAŽIVANJE (1:N) -->
+            <section id="tab-scan" class="tab-pane active">
+                <div class="photo-scan-card">
+                    <!-- Drop / Select Zone -->
+                    <div class="photo-upload-zone" id="scanUploadZone">
+                        <input type="file" id="fileInputScan" accept="image/*" style="display: none;">
+                        
+                        <div class="upload-placeholder" id="scanPlaceholder">
+                            <div class="upload-icon-pulse">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                    <circle cx="12" cy="13" r="4"/>
+                                </svg>
+                            </div>
+                            <h3>Dodirnite za odabir fotografije</h3>
+                            <p>Uslikajte kamerom mobitela ili odaberite sliku iz galerije za provjeru u bazi</p>
+                            <span class="upload-chip">📸 Snimi / Odaberi sliku</span>
+                        </div>
+
+                        <!-- Active Image Preview -->
+                        <div class="scan-preview-wrapper" id="scanPreviewWrapper" style="display: none;">
+                            <img id="scanPreviewImg" alt="Pregled slike za analizu">
+                            <div class="scanner-hud">
+                                <div class="corner-bracket top-left"></div>
+                                <div class="corner-bracket top-right"></div>
+                                <div class="corner-bracket bottom-left"></div>
+                                <div class="corner-bracket bottom-right"></div>
+                                <div class="scan-laser" id="scanLaser"></div>
+                            </div>
+                            <button class="remove-photo-btn" id="btnRemoveScanPhoto" title="Ukloni sliku">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- Action Bar -->
+                    <div class="scan-actions">
+                        <button class="primary-action-btn" id="btnExecuteSearch" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <circle cx="11" cy="11" r="8"/>
+                                <path d="m21 21-4.35-4.35"/>
+                            </svg>
+                            <span>Pretraži u bazi (1:N)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Dynamic Recognition Results Container (supports single & multi-face detection) -->
+                <div class="scan-results-wrapper" id="scanResultCard" style="display: none;">
+                    <!-- Dynamically rendered via renderScanResult() -->
+                </div>
+            </section>
+
+            <!-- TAB 2: ⚖️ 1:1 FACE COMPARISON -->
+            <section id="tab-compare" class="tab-pane">
+                <div class="section-title">
+                    <h2>1:1 Usporedba lica</h2>
+                    <p>Usporedite dvije fotografije za biometrijsku verifikaciju identiteta</p>
+                </div>
+
+                <div class="compare-grid">
+                    <!-- Photo 1 Slot -->
+                    <div class="compare-slot" id="slotPhoto1">
+                        <div class="slot-preview" id="previewSlot1">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            <span>Fotografija 1</span>
+                        </div>
+                        <img id="imgSlot1" style="display: none;" alt="Slika 1">
+                        <div class="slot-actions">
+                            <button class="slot-btn" onclick="triggerCompareInput(1)">Odaberi sliku 1</button>
+                        </div>
+                        <input type="file" id="fileSlot1" accept="image/*" style="display: none;">
+                    </div>
+
+                    <!-- Photo 2 Slot -->
+                    <div class="compare-slot" id="slotPhoto2">
+                        <div class="slot-preview" id="previewSlot2">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            <span>Fotografija 2</span>
+                        </div>
+                        <img id="imgSlot2" style="display: none;" alt="Slika 2">
+                        <div class="slot-actions">
+                            <button class="slot-btn" onclick="triggerCompareInput(2)">Odaberi sliku 2</button>
+                        </div>
+                        <input type="file" id="fileSlot2" accept="image/*" style="display: none;">
+                    </div>
+                </div>
+
+                <button class="primary-btn compare-btn" id="btnRunCompare">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M16 3h5v5"/>
+                        <path d="M8 21H3v-5"/>
+                        <path d="M21 3l-7 7"/>
+                        <path d="M3 21l7-7"/>
+                    </svg>
+                    <span>USPOREDI BIOMETRIJU</span>
+                </button>
+
+                <!-- Comparison Result Banner -->
+                <div class="compare-result-card" id="compareResultCard" style="display: none;">
+                    <div class="verdict-banner" id="compareVerdict">
+                        <span class="verdict-icon" id="compareVerdictIcon">✅</span>
+                        <div class="verdict-text">
+                            <h3 id="compareVerdictTitle">ISTA OSOBA</h3>
+                            <p id="compareVerdictDesc">Visoka pouzdanost biometrijskog poklapanja</p>
+                        </div>
+                        <div class="verdict-score" id="compareScore">88.4%</div>
+                    </div>
+                    <div class="meter-bar">
+                        <div class="meter-fill" id="compareMeterFill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: ➕ PERSON ENROLLMENT -->
+            <section id="tab-enroll" class="tab-pane">
+                <div class="section-title">
+                    <h2>Registracija u bazu</h2>
+                    <p>Unos nove osobe i biometrijskih uzoraka u ArgusFace</p>
+                </div>
+
+                <div class="enroll-form">
+                    <!-- Photo selection / capture -->
+                    <div class="enroll-photo-picker" id="enrollPhotoPicker">
+                        <div class="picker-placeholder" id="enrollPlaceholder">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M12 8v8"/>
+                                <path d="M8 12h8"/>
+                            </svg>
+                            <span>Dodirnite za odabir fotografije</span>
+                        </div>
+                        <img id="enrollPreviewImg" style="display: none;" alt="Novo lice">
+                        <input type="file" id="fileEnroll" accept="image/*" style="display: none;">
+                    </div>
+
+                    <!-- Input Fields -->
+                    <div class="form-group">
+                        <label for="enrollName">Ime i prezime *</label>
+                        <input type="text" id="enrollName" class="form-input" placeholder="npr. Ana Kovač" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Sigurnosna Uloga</label>
+                        <div class="role-selector">
+                            <button type="button" class="role-btn active" data-role="standard">Standard</button>
+                            <button type="button" class="role-btn" data-role="vip">VIP</button>
+                            <button type="button" class="role-btn" data-role="blacklist">Blacklist</button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="enrollNotes">Bilješke ili odjel</label>
+                        <input type="text" id="enrollNotes" class="form-input" placeholder="npr. Uprava / Posjetitelj">
+                    </div>
+
+                    <button class="primary-btn" id="btnSubmitEnroll">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                            <polyline points="17 21 17 13 7 13 7 21"/>
+                            <polyline points="7 3 7 8 15 8"/>
+                        </svg>
+                        <span>SPREMI OSOBU U BAZU</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB 4: ⚙️ SYSTEM & ADMIN -->
+            <section id="tab-system" class="tab-pane">
+                <div class="section-title">
+                    <h2>Status & Sigurnost</h2>
+                    <p>Nadzor AI enginea, baze podataka i ovlaštenih korisnika</p>
+                </div>
+
+                <!-- Stats Cards Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon cyan">👥</div>
+                        <div class="stat-content">
+                            <span class="stat-val" id="statPersons">--</span>
+                            <span class="stat-lbl">Osoba u bazi</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon purple">📸</div>
+                        <div class="stat-content">
+                            <span class="stat-val" id="statSamples">--</span>
+                            <span class="stat-lbl">Uzoraka lica</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green">⚡</div>
+                        <div class="stat-content">
+                            <span class="stat-val" id="statIndex">FAISS</span>
+                            <span class="stat-lbl">Indeks pretrage</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon amber">🛡️</div>
+                        <div class="stat-content">
+                            <span class="stat-val" id="statSpoofing">Aktivno</span>
+                            <span class="stat-lbl">Anti-Spoofing</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Persons Database Directory & Search -->
+                <div class="card-section">
+                    <div class="card-section-header">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <h3>Baza registriranih osoba</h3>
+                            <span class="count-badge" id="personsCountBadge">0</span>
+                        </div>
+                        <button class="small-btn refresh-btn" id="btnRefreshPersons" title="Osvježi bazu">🔄</button>
+                    </div>
+
+                    <!-- Search Input -->
+                    <div class="search-input-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                        </svg>
+                        <input type="text" id="inputSearchPersons" class="search-input" placeholder="Pretraži bazu po imenu ili bilješci...">
+                        <button class="search-clear-btn" id="btnClearPersonSearch" style="display: none;">✕</button>
+                    </div>
+
+                    <!-- Role Filter Chips -->
+                    <div class="role-filter-row">
+                        <button type="button" class="filter-chip active" data-filter="all">Sve</button>
+                        <button type="button" class="filter-chip" data-filter="standard">Standard</button>
+                        <button type="button" class="filter-chip" data-filter="vip">VIP</button>
+                        <button type="button" class="filter-chip" data-filter="blacklist">Blacklist</button>
+                    </div>
+
+                    <!-- Persons Directory List -->
+                    <div class="persons-list" id="personsDirectoryList">
+                        <div class="loading-spinner">Učitavanje baze...</div>
+                    </div>
+                </div>
+
+                <!-- Bot Access Control List -->
+                <div class="card-section">
+                    <div class="card-section-header">
+                        <h3>Ovlašteni Telegram korisnici</h3>
+                        <span class="count-badge" id="userCountBadge">0</span>
+                    </div>
+                    <div class="user-list" id="authorizedUserList">
+                        <div class="loading-spinner">Učitavanje...</div>
+                    </div>
+                </div>
+
+                <!-- Security & PIN Info -->
+                <div class="card-section">
+                    <div class="card-section-header">
+                        <h3>Sigurnosni PIN</h3>
+                    </div>
+                    <div class="pin-info-row">
+                        <span class="pin-label">Aktivni PIN sustava:</span>
+                        <span class="pin-value" id="systemPinDisplay">••••••</span>
+                        <button class="small-btn" id="btnTogglePinView">Prikaži</button>
+                    </div>
+                    <p class="section-footnote">PIN štiti Telegram bota i mobilnu aplikaciju od neovlaštenog pristupa.</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Floating Glass Bottom Navigation Bar -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-tab="tab-scan">
+                <div class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                        <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                        <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                        <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                        <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                </div>
+                <span>Skeniraj</span>
+            </button>
+            <button class="nav-item" data-tab="tab-compare">
+                <div class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M16 3h5v5"/>
+                        <path d="M8 21H3v-5"/>
+                        <path d="M21 3l-7 7"/>
+                        <path d="M3 21l7-7"/>
+                    </svg>
+                </div>
+                <span>Usporedi</span>
+            </button>
+            <button class="nav-item" data-tab="tab-enroll">
+                <div class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="8.5" cy="7" r="4"/>
+                        <line x1="20" y1="8" x2="20" y2="14"/>
+                        <line x1="23" y1="11" x2="17" y2="11"/>
+                    </svg>
+                </div>
+                <span>Registriraj</span>
+            </button>
+            <button class="nav-item" data-tab="tab-system">
+                <div class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/>
+                        <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/>
+                        <path d="M12 2v2"/>
+                        <path d="M12 20v2"/>
+                        <path d="m4.93 4.93 1.41 1.41"/>
+                        <path d="m17.66 17.66 1.41 1.41"/>
+                        <path d="M2 12h2"/>
+                        <path d="M20 12h2"/>
+                    </svg>
+                </div>
+                <span>Sustav</span>
+            </button>
+        </nav>
+
+        <!-- Biometric PIN Pad Modal (Lock Screen) -->
+        <div id="pinLockModal" class="pin-modal" style="display: none;">
+            <div class="pin-container">
+                <div class="pin-header">
+                    <div class="lock-shield-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </div>
+                    <h2>ArgusFace Zaštita</h2>
+                    <p id="pinPromptText">Unesite sigurnosni PIN za pristup sustavu</p>
+                </div>
+
+                <div class="pin-dots">
+                    <span class="dot" id="dot1"></span>
+                    <span class="dot" id="dot2"></span>
+                    <span class="dot" id="dot3"></span>
+                    <span class="dot" id="dot4"></span>
+                    <span class="dot" id="dot5"></span>
+                    <span class="dot" id="dot6"></span>
+                </div>
+
+                <!-- Number Keypad -->
+                <div class="keypad">
+                    <button class="key-btn" data-key="1">1</button>
+                    <button class="key-btn" data-key="2">2</button>
+                    <button class="key-btn" data-key="3">3</button>
+                    <button class="key-btn" data-key="4">4</button>
+                    <button class="key-btn" data-key="5">5</button>
+                    <button class="key-btn" data-key="6">6</button>
+                    <button class="key-btn" data-key="7">7</button>
+                    <button class="key-btn" data-key="8">8</button>
+                    <button class="key-btn" data-key="9">9</button>
+                    <button class="key-btn action-key" id="btnPinClear">C</button>
+                    <button class="key-btn" data-key="0">0</button>
+                    <button class="key-btn action-key" id="btnPinBackspace">⌫</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toastNotification" class="toast" style="display: none;"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
