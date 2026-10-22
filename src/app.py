@@ -1,5 +1,20 @@
 import os
 import sys
+
+# Sigurno rukovanje konzolnim izlazom kada se aplikacija pokreće preko pythonw.exe
+class _NullWriter:
+    def write(self, s):
+        pass
+    def flush(self):
+        pass
+    def isatty(self):
+        return False
+
+if getattr(sys, "stdout", None) is None:
+    sys.stdout = _NullWriter()
+if getattr(sys, "stderr", None) is None:
+    sys.stderr = _NullWriter()
+
 import atexit
 import gradio as gr
 

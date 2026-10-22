@@ -37,7 +37,11 @@ def load_settings() -> dict:
         "email_notify_blacklist": True,
         "email_notify_spoof": True,
         "email_notify_vip": False,
-        "email_cooldown_min": 10
+        "email_cooldown_min": 10,
+        "api_enabled": True,
+        "api_host": "0.0.0.0",
+        "api_port": 5055,
+        "api_key": ""
     }
     if not os.path.isfile(SETTINGS_FILE):
         return defaults

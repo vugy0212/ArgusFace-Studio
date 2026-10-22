@@ -22,6 +22,20 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from PIL import Image, ImageOps
 
+# Ensure safe stream fallback when running under pythonw.exe without a console window
+class _NullWriter:
+    def write(self, s):
+        pass
+    def flush(self):
+        pass
+    def isatty(self):
+        return False
+
+if getattr(sys, "stdout", None) is None:
+    sys.stdout = _NullWriter()
+if getattr(sys, "stderr", None) is None:
+    sys.stderr = _NullWriter()
+
 # Ensure project root and src are on sys.path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(CURRENT_DIR)
@@ -883,17 +897,55 @@ _server_thread = None
 _server_instance = None
 
 def run_uvicorn_server(host: str, port: int):
-    config_uv = uvicorn.Config(app=app, host=host, port=port, log_level="info")
-    server = uvicorn.Server(config_uv)
     global _server_instance
-    _server_instance = server
-    server.run()
+    if getattr(sys, "stdout", None) is None:
+        sys.stdout = _NullWriter()
+    if getattr(sys, "stderr", None) is None:
+        sys.stderr = _NullWriter()
+
+    try:
+        config_uv = uvicorn.Config(
+            app=app,
+            host=host,
+            port=port,
+            log_level="info",
+            access_log=False
+        )
+        server = uvicorn.Server(config_uv)
+        _server_instance = server
+        server.run()
+    except Exception:
+        # Fallback without logging configuration if stream is invalid
+        try:
+            config_uv = uvicorn.Config(
+                app=app,
+                host=host,
+                port=port,
+                log_config=None,
+                access_log=False
+            )
+            server = uvicorn.Server(config_uv)
+            _server_instance = server
+            server.run()
+        except Exception:
+            pass
+
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex((host, port)) == 0
+    except Exception:
+        return False
 
 def start_api_service_background(host: str = "0.0.0.0", port: int = 5055):
     """Starts the FastAPI server in a dedicated background daemon thread."""
     global _server_thread
     if _server_thread is not None and _server_thread.is_alive():
         return True, f"API poslužitelj već radi na {host}:{port}"
+    if is_port_in_use(port, "127.0.0.1"):
+        return True, f"API poslužitelj je već aktivan na portu {port} (samostalni servis)."
     try:
         _server_thread = threading.Thread(
             target=run_uvicorn_server,
@@ -902,6 +954,9 @@ def start_api_service_background(host: str = "0.0.0.0", port: int = 5055):
             name="ArgusFace-API-Server"
         )
         _server_thread.start()
+        time.sleep(0.4)
+        if not _server_thread.is_alive():
+            return False, f"API poslužitelj se nije uspio pokrenuti na portu {port}."
         return True, f"API poslužitelj je uspješno pokrenut na portu {port}."
     except Exception as e:
         return False, f"Greška pri pokretanju API poslužitelja: {e}"
