@@ -522,6 +522,62 @@ body {
     border-color: rgba(239, 68, 68, 0.3);
 }
 
+.badge.warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.35);
+}
+
+.result-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-glass);
+}
+
+.action-pill-btn {
+    flex: 1;
+    min-width: 140px;
+    height: 38px;
+    padding: 0 14px;
+    border-radius: 19px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.action-pill-btn.primary {
+    background: linear-gradient(135deg, rgba(0, 242, 254, 0.18), rgba(59, 130, 246, 0.18));
+    border-color: rgba(0, 242, 254, 0.4);
+    color: var(--accent-cyan);
+}
+
+.action-pill-btn.primary:hover {
+    background: linear-gradient(135deg, rgba(0, 242, 254, 0.3), rgba(59, 130, 246, 0.3));
+    transform: translateY(-1px);
+}
+
+.action-pill-btn.secondary {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--text-secondary);
+}
+
+.action-pill-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
 .res-time {
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -866,22 +922,49 @@ body {
 }
 
 .primary-btn {
-    width: 100%;
-    padding: 14px;
-    border-radius: var(--radius-md);
+    width: auto;
+    min-width: 200px;
+    max-width: 270px;
+    height: 42px;
+    padding: 0 22px;
+    margin: 14px auto 0 auto;
+    border-radius: 21px;
     background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
     color: #030712;
     font-family: var(--font-sans);
     font-weight: 700;
-    font-size: 0.95rem;
+    font-size: 0.88rem;
     border: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 8px;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(0, 242, 254, 0.3);
+    box-shadow: 0 3px 14px rgba(0, 242, 254, 0.28);
     transition: all 0.2s ease;
+}
+
+.person-action-row {
+    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.person-add-snap-btn {
+    background: rgba(0, 242, 254, 0.1);
+    border: 1px solid rgba(0, 242, 254, 0.3);
+    color: var(--accent-cyan);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.person-add-snap-btn:hover {
+    background: rgba(0, 242, 254, 0.2);
+    border-color: var(--accent-cyan);
 }
 
 .primary-btn svg {

@@ -26,7 +26,8 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     WebAppInfo,
-    constants
+    constants,
+    BotCommand
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -112,6 +113,13 @@ ADMIN_ROLE_CHOICE = [
     ["❌ Odustani"]
 ]
 ADMIN_ROLE_MARKUP = ReplyKeyboardMarkup(ADMIN_ROLE_CHOICE, resize_keyboard=True)
+
+def make_sim_bar(pct: float, length: int = 10) -> str:
+    """Generates an ASCII progress bar for biometric similarity: e.g. [████████░░] 84.5%"""
+    clamped = max(0.0, min(100.0, float(pct)))
+    filled = int(round((clamped / 100.0) * length))
+    empty = length - filled
+    return f"`[{'█' * filled}{'░' * empty}] {clamped:.1f}%`"
 
 def get_api_headers() -> dict:
     headers = {}
@@ -896,10 +904,11 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f1_desc = f"Slika 1: ~{f1.get('age', '-')} god ({f1.get('gender', '-')})"
                 f2_desc = f"Slika 2: ~{f2.get('age', '-')} god ({f2.get('gender', '-')})"
 
+                sim_bar = make_sim_bar(sim_pct)
                 out_msg = (
                     f"{verdict_icon} {verdict_title}\n\n"
-                    f"📊 **Biometrijska sličnost:** `{sim_pct}%` (Prag: `{thresh_val}%`)\n"
-                    f"🎯 **Pouzdanost ocjene:** `{conf}`\n\n"
+                    f"📊 **Biometrijska sličnost:** {sim_bar}\n"
+                    f"🎯 **Pouzdanost ocjene:** `{conf}` (Sigurnosni prag: `{thresh_val}%`)\n\n"
                     f"👤 **Procjena lica:**\n"
                     f"• {f1_desc}\n"
                     f"• {f2_desc}"
@@ -1393,18 +1402,19 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                         else:
                             role_badge = "🟢 **PRIJAVLJENA OSOBA**"
 
+                        sim_bar = make_sim_bar(sim)
                         if matched:
                             item_txt = (
                                 f"👤 **Lice #{idx+1}: {name}**\n"
                                 f"🏷️ Status: {role_badge}\n"
-                                f"📈 Podudaranje: `{sim}%` (Prag: `{used_thresh}%`, Uzoraka u bazi: {f.get('sample_count', 1)})\n"
+                                f"📈 Podudaranje: {sim_bar} (Prag: `{used_thresh}%`, Uzoraka: {f.get('sample_count', 1)})\n"
                                 f"📐 Dob/Spol: `{bio_desc}`\n"
                                 f"🛡️ Liveness provjera: `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({live_conf}%)`"
                             )
                         elif status == "Moguće poklapanje" and name and name not in ("Nepoznat", "Nepoznato", "Baza je prazna"):
                             item_txt = (
                                 f"👤 **Lice #{idx+1}: {name}? (Moguće poklapanje)**\n"
-                                f"⚠️ Sličnost: `{sim}%` (Ispod sigurnosnog praga od `{used_thresh}%`)\n"
+                                f"⚠️ Sličnost: {sim_bar} (Ispod sigurnosnog praga od `{used_thresh}%`)\n"
                                 f"🏷️ Status u bazi: {role_badge}\n"
                                 f"📐 Dob/Spol: `{bio_desc}`\n"
                                 f"🛡️ Liveness provjera: `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({live_conf}%)`"
@@ -1412,7 +1422,7 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                         else:
                             item_txt = (
                                 f"👤 **Lice #{idx+1}: Nepoznata osoba**\n"
-                                f"❌ Nema poklapanja u bazi (Maks. sličnost: `{sim}%`, Prag: `{used_thresh}%`)\n"
+                                f"❌ Nema poklapanja: {sim_bar} (Sigurnosni prag: `{used_thresh}%`)\n"
                                 f"📐 Dob/Spol: `{bio_desc}`"
                             )
                         items.append(item_txt)
@@ -2159,6 +2169,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
+async def setup_bot_commands(application):
+    """Registers the persistent Telegram bot menu button commands."""
+    commands = [
+        BotCommand("menu", "📋 Glavni izbornik"),
+        BotCommand("scan", "🔍 Skeniraj lice u bazi (1:N)"),
+        BotCommand("compare", "⚖️ Usporedi 2 slike (1:1)"),
+        BotCommand("enroll", "➕ Registriraj osobu u bazu"),
+        BotCommand("database", "🗂️ Baza registriranih osoba"),
+        BotCommand("status", "📊 Status i performanse sustava"),
+        BotCommand("webapp", "📱 Otvori Mini Web App"),
+        BotCommand("lock", "🔒 Zaključaj sesiju (PIN)"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+        logger.info("Uspješno postavljene Telegram Bot naredbe u izborniku.")
+    except Exception as e:
+        logger.warning(f"Greška pri postavljanju Telegram Bot naredbi: {e}")
+
 # =========================================================================
 # MAIN APP ENTRYPOINT
 # =========================================================================
@@ -2179,7 +2207,7 @@ def main():
     print(f"[*] Ovlaštenih korisnika: {len(cfg.get('allowed_users', []))}")
     print(f"[*] Administratora: {len(cfg.get('admin_chat_ids', []))}")
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(setup_bot_commands).build()
 
     # Compare conversation handler (1:1)
     compare_conv_handler = ConversationHandler(
@@ -2314,6 +2342,7 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("scan", search_button_prompt))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("app", webapp_command))
@@ -2321,7 +2350,7 @@ def main():
     app.add_handler(CommandHandler("lock", lock_command))
     app.add_handler(CommandHandler("admin", admin_panel_open))
 
-    app.add_handler(CommandHandler(["trazi", "osobe", "search"], search_persons_command))
+    app.add_handler(CommandHandler(["trazi", "osobe", "search", "database", "baza"], search_persons_command))
 
     # Menu button handlers
     app.add_handler(MessageHandler(filters.Regex("^📊 Status sustava$"), status_command))

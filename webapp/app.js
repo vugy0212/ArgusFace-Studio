@@ -365,10 +365,18 @@ function renderScanResult(data, queryBlob) {
         `;
     }
 
+    window._lastSearchResults = results;
+
     // 3. Render card for EACH detected face
     results.forEach((f, idx) => {
         const isMatched = Boolean(f.matched);
-        const name = f.person_name || f.name || (isMatched ? 'Identificirana osoba' : 'Nepoznata osoba');
+        const status = f.status || '';
+        const isPossible = (!isMatched && status === 'Moguće poklapanje' && f.person_name && f.person_name !== 'Nepoznat' && f.person_name !== 'Nepoznato');
+
+        let name = f.person_name || f.name || 'Nepoznata osoba';
+        if (!isMatched && !isPossible) {
+            name = 'Nepoznata osoba';
+        }
         const role = (f.role || 'standard').toLowerCase();
         const simPct = (typeof f.similarity_pct !== 'undefined') ? f.similarity_pct : Math.round((f.similarity || 0) * 100);
 
@@ -392,6 +400,12 @@ function renderScanResult(data, queryBlob) {
                 badgeText = 'PREPOZNATO';
                 fillBg = 'linear-gradient(90deg, var(--accent-cyan), var(--accent-green))';
             }
+        } else if (isPossible) {
+            badgeClass = 'badge warning';
+            badgeText = 'MOGUĆE';
+            fillBg = 'linear-gradient(90deg, #f59e0b, #eab308)';
+            rolePillClass = `role-pill ${role}`;
+            rolePillText = `${role.toUpperCase()}?`;
         } else {
             badgeClass = 'badge unknown';
             badgeText = 'NEPOZNATO';
@@ -424,7 +438,13 @@ function renderScanResult(data, queryBlob) {
         }
         if (isMatched && f.person_id) {
             chips.push(`🏷️ ID #${f.person_id} • Uzoraka: ${f.sample_count || 1}`);
+        } else if (isPossible) {
+            chips.push(`⚠️ Sličnost ispod sigurnosnog praga`);
         }
+
+        const simSubtext = isMatched
+            ? `${simPct}% sličnost`
+            : (isPossible ? `Moguće poklapanje: ${simPct}%` : `Maks. sličnost: ${simPct}%`);
 
         html += `
             <div class="result-card" data-face-idx="${idx}">
@@ -433,7 +453,7 @@ function renderScanResult(data, queryBlob) {
                         <span class="face-index-chip">Lice #${idx + 1}</span>
                         <span class="${badgeClass}">${badgeText}</span>
                     </div>
-                    <span class="res-time">${isMatched ? 'Usklađeno' : 'Nema poklapanja'}</span>
+                    <span class="res-time">${isMatched ? 'Usklađeno' : (isPossible ? 'Ispod praga' : 'Nema poklapanja')}</span>
                 </div>
 
                 <div class="result-body">
@@ -443,7 +463,7 @@ function renderScanResult(data, queryBlob) {
                             <img src="${queryCropSrc}" alt="Lice #${idx + 1}">
                         </div>
                         <div class="photo-divider">
-                            <div class="divider-icon">${isMatched ? '⚡' : '—'}</div>
+                            <div class="divider-icon">${isMatched ? '⚡' : (isPossible ? '≈' : '—')}</div>
                         </div>
                         <div class="photo-box ${dbCropSrc ? '' : 'photo-box-empty'}">
                             <span class="photo-tag">Baza podataka</span>
@@ -467,7 +487,7 @@ function renderScanResult(data, queryBlob) {
                         <h3>${escapeHtml(name)}</h3>
                         <div class="details-row">
                             <span class="${rolePillClass}">${rolePillText}</span>
-                            <span class="similarity-text">${isMatched ? `${simPct}% sličnost` : `Maks. ${simPct}% (ispod praga)`}</span>
+                            <span class="similarity-text">${simSubtext}</span>
                         </div>
 
                         <div class="meter-bar">
@@ -479,6 +499,22 @@ function renderScanResult(data, queryBlob) {
                                 ${chips.map(c => `<span class="attr-chip">${escapeHtml(c)}</span>`).join('')}
                             </div>
                         ` : ''}
+
+                        <!-- Quick Action Buttons for 1-Tap workflow -->
+                        <div class="result-card-actions">
+                            ${isMatched ? `
+                                <button type="button" class="action-pill-btn primary" onclick="quickEnrollFor('${escapeHtml(name)}', '${role}')">
+                                    <span>📸 Dodaj sliku (${escapeHtml(name.split(' ')[0])})</span>
+                                </button>
+                            ` : `
+                                <button type="button" class="action-pill-btn primary" onclick="quickEnrollNewFace(${idx})">
+                                    <span>➕ Registriraj ovo lice</span>
+                                </button>
+                            `}
+                            <button type="button" class="action-pill-btn secondary" onclick="resetScanAndRetake()">
+                                <span>🔄 Novo skeniranje</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -797,6 +833,11 @@ async function loadPersonsDirectory(query = '', role = 'all') {
                             ${p.created_at ? `<span>•</span><span>${escapeHtml(p.created_at.slice(0, 10))}</span>` : ''}
                         </div>
                         ${p.notes ? `<div class="person-notes-txt">📝 ${escapeHtml(p.notes)}</div>` : ''}
+                        <div class="person-action-row">
+                            <button type="button" class="person-add-snap-btn" onclick="quickEnrollFor('${escapeHtml(p.name)}', '${p.role || 'standard'}')">
+                                📸 Dodaj sliku
+                            </button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -810,6 +851,80 @@ function goToEnrollTab() {
     triggerHaptic('light');
     const enrollBtn = document.querySelector('.bottom-nav .nav-item[data-tab="tab-enroll"]');
     if (enrollBtn) enrollBtn.click();
+}
+
+function quickEnrollFor(name, role = 'standard') {
+    triggerHaptic('medium');
+    goToEnrollTab();
+    const nameInput = document.getElementById('enrollName');
+    if (nameInput) {
+        nameInput.value = name;
+    }
+    const cleanRole = (role || 'standard').toLowerCase();
+    document.querySelectorAll('.role-selector .role-btn').forEach(btn => {
+        if (btn.dataset.role === cleanRole) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+    document.querySelector('.app-content')?.scrollTo({ top: 0, behavior: 'smooth' });
+    showToast(`📸 Dodavanje novog uzorka za: ${name}`);
+}
+
+async function quickEnrollNewFace(idx) {
+    triggerHaptic('medium');
+    const f = window._lastSearchResults?.[idx];
+    goToEnrollTab();
+
+    const nameInput = document.getElementById('enrollName');
+    if (f && f.status === 'Moguće poklapanje' && f.person_name && f.person_name !== 'Nepoznato' && f.person_name !== 'Nepoznat') {
+        if (nameInput) nameInput.value = f.person_name;
+    }
+
+    if (f && f.query_crop_base64) {
+        try {
+            const byteCharacters = atob(f.query_crop_base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: 'image/jpeg' });
+            state.enrollBlob = blob;
+
+            const preview = document.getElementById('enrollPreviewImg');
+            const placeholder = document.getElementById('enrollPlaceholder');
+            if (preview && placeholder) {
+                preview.src = `data:image/jpeg;base64,${f.query_crop_base64}`;
+                preview.style.display = 'block';
+                placeholder.style.display = 'none';
+            }
+        } catch (e) {
+            console.error('Error transferring face crop:', e);
+        }
+    } else if (state.capturedBlob) {
+        state.enrollBlob = state.capturedBlob;
+        const preview = document.getElementById('enrollPreviewImg');
+        const placeholder = document.getElementById('enrollPlaceholder');
+        if (preview && placeholder) {
+            preview.src = URL.createObjectURL(state.capturedBlob);
+            preview.style.display = 'block';
+            placeholder.style.display = 'none';
+        }
+    }
+
+    document.querySelector('.app-content')?.scrollTo({ top: 0, behavior: 'smooth' });
+    if (nameInput) nameInput.focus();
+    showToast('➕ Lice je prebačeno! Upišite ime i spremite.');
+}
+
+function resetScanAndRetake() {
+    triggerHaptic('light');
+    const resultCard = document.getElementById('scanResultCard');
+    if (resultCard) resultCard.style.display = 'none';
+    removeScanPhoto();
+    document.getElementById('fileInputScan')?.click();
 }
 
 // =========================================================================
