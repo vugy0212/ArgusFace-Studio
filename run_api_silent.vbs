@@ -8,13 +8,13 @@ strPath = fso.GetParentFolderName(WScript.ScriptFullName)
 
 WshShell.CurrentDirectory = strPath
 
-' Pronađi pythonw.exe (bez terminala)
-pyw = "pythonw.exe"
-If fso.FileExists(strPath & "\python\pythonw.exe") Then
-    pyw = """" & strPath & "\python\pythonw.exe"""
-ElseIf fso.FileExists(strPath & "\.venv\Scripts\pythonw.exe") Then
-    pyw = """" & strPath & "\.venv\Scripts\pythonw.exe"""
+' Pronađi python.exe (pokrenut sa stilom prozora 0 = potpuno skriven u pozadini)
+py = "python.exe"
+If fso.FileExists(strPath & "\.venv\Scripts\python.exe") Then
+    py = strPath & "\.venv\Scripts\python.exe"
+ElseIf fso.FileExists(strPath & "\python\python.exe") Then
+    py = strPath & "\python\python.exe"
 End If
 
-' Pokreni API poslužitelj u pozadini (0 = skriveni prozor)
-WshShell.Run pyw & " -m src.api_server", 0, False
+' Pokreni API poslužitelj u pozadini (0 = potpuno skriven prozor)
+WshShell.Run """" & py & """ -m src.api_server", 0, False

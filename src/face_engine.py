@@ -468,13 +468,19 @@ def invalidate_face_index():
 
 def get_face_index(all_samples=None, force_refresh=False) -> FaceIndex:
     global _face_index
+    try:
+        import db
+    except ImportError:
+        from src import db
+
+    # Automatically detect if database was modified on disk by another process (e.g. Studio GUI)
+    if not force_refresh and _face_index is not None and all_samples is None:
+        if hasattr(db, "check_and_refresh_cache_if_needed") and db.check_and_refresh_cache_if_needed():
+            _face_index = None
+
     if _face_index is None or force_refresh:
         if all_samples is None:
-            try:
-                import db
-            except ImportError:
-                from src import db
-            all_samples = db.get_cached_embeddings()
+            all_samples = db.get_cached_embeddings(force_refresh=force_refresh)
         _face_index = FaceIndex(all_samples)
     return _face_index
 

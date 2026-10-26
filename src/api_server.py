@@ -30,6 +30,8 @@ class _NullWriter:
         pass
     def isatty(self):
         return False
+    def fileno(self):
+        raise OSError(9, "Bad file descriptor")
 
 if getattr(sys, "stdout", None) is None:
     sys.stdout = _NullWriter()
@@ -304,12 +306,17 @@ def get_status(_: bool = Depends(verify_api_key)):
         info = idx.get_info() if hasattr(idx, "get_info") else {}
         persons = db.get_all_persons()
         
+        cfg = config.load_settings()
+        sys_threshold = float(cfg.get("threshold", 0.45))
+
         return {
             "status": "online",
             "service": "ArgusFace Studio AI Engine",
             "version": "1.0.0",
             "total_persons": len(persons),
             "total_samples": info.get("total_samples", 0),
+            "threshold": sys_threshold,
+            "threshold_pct": round(sys_threshold * 100, 1),
             "index_backend": info.get("backend", "NumPy BLAS"),
             "has_faiss": info.get("has_faiss", False),
             "anti_spoofing": config.get_anti_spoofing()
@@ -324,13 +331,17 @@ def get_status(_: bool = Depends(verify_api_key)):
 async def compare_faces(
     image1: UploadFile = File(..., description="Prva fotografija za usporedbu"),
     image2: UploadFile = File(..., description="Druga fotografija za usporedbu"),
-    threshold: float = Form(0.50, description="Biometrijski prag sličnosti (0.0 - 1.0)"),
+    threshold: Optional[float] = Form(None, description="Biometrijski prag sličnosti (0.0 - 1.0)"),
     _: bool = Depends(verify_api_key)
 ):
     """
     Compares two photos and verifies if they depict the same person.
     Extracts facial embeddings and calculates cosine similarity.
     """
+    cfg = config.load_settings()
+    if threshold is None or threshold <= 0:
+        threshold = float(cfg.get("threshold", 0.45))
+
     bytes1 = await image1.read()
     bytes2 = await image2.read()
 
@@ -1009,4 +1020,4 @@ if __name__ == "__main__":
     host = api_cfg.get("host", "0.0.0.0")
     port = api_cfg.get("port", 5055)
     print(f"[*] Pokrećem ArgusFace lokalni API poslužitelj na http://{host}:{port} ...")
-    uvicorn.run("src.api_server:app", host=host, port=port, reload=False)
+    run_uvicorn_server(host, port)

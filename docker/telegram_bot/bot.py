@@ -862,7 +862,13 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "image1": ("photo1.jpg", photo_1_bytes, "image/jpeg"),
         "image2": ("photo2.jpg", bytes(photo_2_bytes), "image/jpeg")
     }
-    data = {"threshold": 0.50}
+    data = {}
+    search_threshold = os.getenv("BOT_SEARCH_THRESHOLD", "").strip()
+    if search_threshold:
+        try:
+            data["threshold"] = float(search_threshold)
+        except ValueError:
+            pass
 
     try:
         resp = requests.post(url, files=files, data=data, headers=get_api_headers(), timeout=15)
@@ -876,6 +882,9 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conf = res.get("confidence", "Srednja")
                 f1 = res.get("face1", {})
                 f2 = res.get("face2", {})
+                thresh_val = res.get("threshold_pct")
+                if thresh_val is None:
+                    thresh_val = round(float(res.get("threshold", 0.45)) * 100, 1)
 
                 if same:
                     verdict_icon = "✅"
@@ -889,7 +898,7 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 out_msg = (
                     f"{verdict_icon} {verdict_title}\n\n"
-                    f"📊 **Biometrijska sličnost:** `{sim_pct}%` (Prag: `50%`)\n"
+                    f"📊 **Biometrijska sličnost:** `{sim_pct}%` (Prag: `{thresh_val}%`)\n"
                     f"🎯 **Pouzdanost ocjene:** `{conf}`\n\n"
                     f"👤 **Procjena lica:**\n"
                     f"• {f1_desc}\n"
@@ -1324,18 +1333,32 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
         return
 
     photos = update.message.photo
-    if not photos:
+    doc = update.message.document
+    if not photos and not doc:
         return
 
-    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+    if doc:
+        mime = (doc.mime_type or "").lower()
+        fname = (doc.file_name or "").lower()
+        if not (mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp"))):
+            return
+        file = await context.bot.get_file(doc.file_id)
+    else:
+        photo = photos[-1]
+        file = await context.bot.get_file(photo.file_id)
 
-    photo = photos[-1]
-    file = await context.bot.get_file(photo.file_id)
+    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
     photo_bytes = await file.download_as_bytearray()
 
     url = f"{ARGUSFACE_API_URL}/api/v1/search"
     files = {"image": ("query.jpg", bytes(photo_bytes), "image/jpeg")}
-    data = {"threshold": 0.50, "check_spoofing": True}
+    data = {"check_spoofing": True}
+    search_threshold = os.getenv("BOT_SEARCH_THRESHOLD", "").strip()
+    if search_threshold:
+        try:
+            data["threshold"] = float(search_threshold)
+        except ValueError:
+            pass
 
     try:
         resp = requests.post(url, files=files, data=data, headers=get_api_headers(), timeout=15)
@@ -1351,9 +1374,11 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                     items = []
                     for idx, f in enumerate(res.get("results", [])):
                         matched = f.get("matched", False)
+                        status = f.get("status", "")
                         name = str(f.get("person_name", "Nepoznato")).replace("_", " ")
                         sim = f.get("similarity_pct", 0.0)
                         role = f.get("role", "standard")
+                        used_thresh = round(float(f.get("threshold", 0.45)) * 100, 1)
                         raw_age = f.get("age")
                         age_str = f"~{raw_age} god" if (raw_age is not None and str(raw_age).lower() != "none") else "N/A"
                         gender_str = f.get("gender") or "N/A"
@@ -1361,25 +1386,33 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                         is_real = f.get("is_real", True)
                         live_conf = round(float(f.get("liveness_conf", 1.0)) * 100, 1)
 
-                        if matched:
-                            if role == "blacklist":
-                                role_badge = "🚨 **CRNA LISTA (ZABRANA)**"
-                            elif role == "vip":
-                                role_badge = "⭐ **VIP OSOBA**"
-                            else:
-                                role_badge = "🟢 **PRIJAVLJENA OSOBA**"
+                        if role == "blacklist":
+                            role_badge = "🚨 **CRNA LISTA (ZABRANA)**"
+                        elif role == "vip":
+                            role_badge = "⭐ **VIP OSOBA**"
+                        else:
+                            role_badge = "🟢 **PRIJAVLJENA OSOBA**"
 
+                        if matched:
                             item_txt = (
                                 f"👤 **Lice #{idx+1}: {name}**\n"
                                 f"🏷️ Status: {role_badge}\n"
-                                f"📈 Podudaranje: `{sim}%` (Uzoraka u bazi: {f.get('sample_count', 1)})\n"
+                                f"📈 Podudaranje: `{sim}%` (Prag: `{used_thresh}%`, Uzoraka u bazi: {f.get('sample_count', 1)})\n"
+                                f"📐 Dob/Spol: `{bio_desc}`\n"
+                                f"🛡️ Liveness provjera: `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({live_conf}%)`"
+                            )
+                        elif status == "Moguće poklapanje" and name and name not in ("Nepoznat", "Nepoznato", "Baza je prazna"):
+                            item_txt = (
+                                f"👤 **Lice #{idx+1}: {name}? (Moguće poklapanje)**\n"
+                                f"⚠️ Sličnost: `{sim}%` (Ispod sigurnosnog praga od `{used_thresh}%`)\n"
+                                f"🏷️ Status u bazi: {role_badge}\n"
                                 f"📐 Dob/Spol: `{bio_desc}`\n"
                                 f"🛡️ Liveness provjera: `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({live_conf}%)`"
                             )
                         else:
                             item_txt = (
                                 f"👤 **Lice #{idx+1}: Nepoznata osoba**\n"
-                                f"❌ Nema poklapanja u bazi (Maks. sličnost: `{sim}%`)\n"
+                                f"❌ Nema poklapanja u bazi (Maks. sličnost: `{sim}%`, Prag: `{used_thresh}%`)\n"
                                 f"📐 Dob/Spol: `{bio_desc}`"
                             )
                         items.append(item_txt)
@@ -2301,8 +2334,8 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^👥 Popis (bot )?korisnika$"), admin_list_users))
     app.add_handler(MessageHandler(filters.Regex("^🔙 Povratak u glavni meni$"), admin_back_to_main))
 
-    # Direct photo upload (1:N search)
-    app.add_handler(MessageHandler(filters.PHOTO, handle_direct_photo_search))
+    # Direct photo upload (1:N search) - supports standard compressed photos and uncompressed documents
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_direct_photo_search))
 
     # General text messages (PIN input, navigation, etc.)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_general_text))
