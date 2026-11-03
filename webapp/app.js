@@ -198,9 +198,13 @@ function clearScanPhoto() {
     const placeholder = document.getElementById('scanPlaceholder');
     const btnExecute = document.getElementById('btnExecuteSearch');
     const fileInput = document.getElementById('fileInputScan');
+    const fileCam = document.getElementById('fileInputScanCamera');
+    const fileGal = document.getElementById('fileInputScanGallery');
     const resultCard = document.getElementById('scanResultCard');
 
     if (fileInput) fileInput.value = '';
+    if (fileCam) fileCam.value = '';
+    if (fileGal) fileGal.value = '';
     preview.src = '';
     previewWrapper.style.display = 'none';
     placeholder.style.display = 'flex';
@@ -447,7 +451,7 @@ function renderScanResult(data, queryBlob) {
             : (isPossible ? `Moguće poklapanje: ${simPct}%` : `Maks. sličnost: ${simPct}%`);
 
         html += `
-            <div class="result-card" data-face-idx="${idx}">
+            <div class="result-card ${(isMatched || isPossible) ? 'clickable-result-card' : ''}" data-face-idx="${idx}" ${(isMatched || isPossible) ? `onclick="if (!event.target.closest('button')) openPersonModalFromScan(${idx})"` : ''}>
                 <div class="result-header">
                     <div class="face-title-group">
                         <span class="face-index-chip">Lice #${idx + 1}</span>
@@ -484,7 +488,7 @@ function renderScanResult(data, queryBlob) {
                     </div>
 
                     <div class="result-details">
-                        <h3>${escapeHtml(name)}</h3>
+                        <h3 class="${(isMatched || isPossible) ? 'clickable-person-title' : ''}" ${(isMatched || isPossible) ? `onclick="openPersonModalFromScan(${idx})"` : ''} title="Dodirnite za detalje i izmjenu podataka">${escapeHtml(name)} ${(isMatched || isPossible) ? '<span class="edit-hint-icon">✏️</span>' : ''}</h3>
                         <div class="details-row">
                             <span class="${rolePillClass}">${rolePillText}</span>
                             <span class="similarity-text">${simSubtext}</span>
@@ -502,7 +506,10 @@ function renderScanResult(data, queryBlob) {
 
                         <!-- Quick Action Buttons for 1-Tap workflow -->
                         <div class="result-card-actions">
-                            ${isMatched ? `
+                            ${(isMatched || isPossible) ? `
+                                <button type="button" class="action-pill-btn edit-btn" onclick="openPersonModalFromScan(${idx})">
+                                    <span>✏️ Uredi osobu</span>
+                                </button>
                                 <button type="button" class="action-pill-btn primary" onclick="quickEnrollFor('${escapeHtml(name)}', '${role}')">
                                     <span>📸 Dodaj sliku (${escapeHtml(name.split(' ')[0])})</span>
                                 </button>
@@ -526,6 +533,17 @@ function renderScanResult(data, queryBlob) {
     container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+window.openPersonModalFromScan = function(faceIdx) {
+    if (window._lastSearchResults && window._lastSearchResults[faceIdx]) {
+        const item = window._lastSearchResults[faceIdx];
+        if (item.person_id) {
+            openPersonModal(item.person_id);
+        } else if (item.person_name || item.name) {
+            openPersonModal(item.person_name || item.name);
+        }
+    }
+};
+
 function toggleAnnotatedPreview() {
     const box = document.getElementById('annotatedImageBox');
     const txt = document.getElementById('txtToggleAnnotated');
@@ -546,6 +564,15 @@ function toggleAnnotatedPreview() {
 function triggerCompareInput(slotNum) {
     triggerHaptic('light');
     document.getElementById(`fileSlot${slotNum}`)?.click();
+}
+
+function triggerCompareCamera(slotNum) {
+    triggerHaptic('light');
+    const camInput = document.getElementById(`fileSlot${slotNum}Camera`);
+    if (camInput) {
+        camInput.value = '';
+        camInput.click();
+    }
 }
 
 function handleCompareFile(slotNum, file) {
@@ -789,6 +816,12 @@ async function loadPersonsDirectory(query = '', role = 'all') {
 
         if (badgeEl) badgeEl.textContent = total;
 
+        // Cache loaded directory persons for instantaneous modal opening
+        if (!window._directoryPersons) window._directoryPersons = {};
+        persons.forEach(p => {
+            window._directoryPersons[p.id] = p;
+        });
+
         if (persons.length === 0) {
             const hasQuery = Boolean(query && query.trim());
             listEl.innerHTML = `
@@ -817,7 +850,7 @@ async function loadPersonsDirectory(query = '', role = 'all') {
                 : '';
 
             return `
-                <div class="person-item-card" data-person-id="${p.id}">
+                <div class="person-item-card" data-person-id="${p.id}" role="button" tabindex="0" onclick="openPersonModal(${p.id})">
                     <div class="person-avatar-box">
                         ${avatarSrc ? `<img src="${avatarSrc}" alt="${escapeHtml(p.name)}">` : `<span class="person-avatar-placeholder">👤</span>`}
                     </div>
@@ -834,7 +867,10 @@ async function loadPersonsDirectory(query = '', role = 'all') {
                         </div>
                         ${p.notes ? `<div class="person-notes-txt">📝 ${escapeHtml(p.notes)}</div>` : ''}
                         <div class="person-action-row">
-                            <button type="button" class="person-add-snap-btn" onclick="quickEnrollFor('${escapeHtml(p.name)}', '${p.role || 'standard'}')">
+                            <button type="button" class="person-edit-btn" onclick="openPersonModal(${p.id})">
+                                ✏️ Uredi podatke
+                            </button>
+                            <button type="button" class="person-add-snap-btn" onclick="event.stopPropagation(); quickEnrollFor('${escapeHtml(p.name)}', '${p.role || 'standard'}')">
                                 📸 Dodaj sliku
                             </button>
                         </div>
@@ -923,11 +959,516 @@ function resetScanAndRetake() {
     triggerHaptic('light');
     const resultCard = document.getElementById('scanResultCard');
     if (resultCard) resultCard.style.display = 'none';
-    removeScanPhoto();
-    document.getElementById('fileInputScan')?.click();
+    clearScanPhoto();
+    openLiveCamera('scan');
 }
 
 // =========================================================================
+// 6b. PERSON DETAILS & EDIT MODAL (SKOČNI PROZOR)
+// =========================================================================
+
+let currentEditingPerson = null;
+
+async function openPersonModal(personIdOrName) {
+    triggerHaptic('light');
+    const modal = document.getElementById('personDetailModal');
+    if (!modal) return;
+
+    // Reset fields & show loading skeleton
+    const editId = document.getElementById('editPersonId');
+    const editName = document.getElementById('editPersonName');
+    const editNotes = document.getElementById('editPersonNotes');
+    const titleEl = document.getElementById('modalPersonTitle');
+    const subTitleEl = document.getElementById('modalPersonSubtitle');
+    const avatarBox = document.getElementById('modalAvatarPreview');
+    const strip = document.getElementById('modalSamplesStrip');
+
+    // 1. Instant Cache Lookup (from memory) so modal opens in 0ms without waiting for network!
+    let cached = null;
+    const isNum = typeof personIdOrName === 'number' || (!isNaN(Number(personIdOrName)) && Number(personIdOrName) > 0);
+    if (isNum) {
+        const numId = Number(personIdOrName);
+        cached = window._directoryPersons ? window._directoryPersons[numId] : null;
+        if (!cached && window._lastSearchResults) {
+            const found = window._lastSearchResults.find(f => Number(f.person_id) === numId);
+            if (found) {
+                cached = {
+                    id: found.person_id,
+                    name: found.person_name || found.name,
+                    role: found.role,
+                    notes: found.notes,
+                    sample_count: found.sample_count,
+                    thumbnail_base64: found.sample_image_base64
+                };
+            }
+        }
+    } else {
+        const strName = String(personIdOrName || '').trim().toLowerCase();
+        if (window._directoryPersons) {
+            cached = Object.values(window._directoryPersons).find(p => (p.name || '').toLowerCase() === strName);
+        }
+        if (!cached && window._lastSearchResults) {
+            const found = window._lastSearchResults.find(f => (f.person_name || f.name || '').toLowerCase() === strName);
+            if (found) {
+                cached = {
+                    id: found.person_id,
+                    name: found.person_name || found.name,
+                    role: found.role,
+                    notes: found.notes,
+                    sample_count: found.sample_count,
+                    thumbnail_base64: found.sample_image_base64
+                };
+            }
+        }
+    }
+
+    if (cached) {
+        currentEditingPerson = cached;
+        if (editId) editId.value = cached.id || '';
+        if (editName) editName.value = cached.name || '';
+        if (editNotes) editNotes.value = cached.notes || '';
+        if (titleEl) titleEl.textContent = cached.name || 'Osoba';
+        if (subTitleEl) subTitleEl.textContent = `ID #${cached.id || '--'} • ${cached.sample_count || 1} uzoraka u bazi`;
+        setEditModalRole(cached.role || 'standard');
+
+        if (avatarBox) {
+            if (cached.thumbnail_base64) {
+                avatarBox.innerHTML = `<img src="data:image/jpeg;base64,${cached.thumbnail_base64}" alt="${escapeHtml(cached.name)}">`;
+            } else {
+                avatarBox.innerHTML = '<span class="avatar-placeholder">👤</span>';
+            }
+        }
+    } else {
+        if (editId) editId.value = '';
+        if (editName) editName.value = 'Učitavanje...';
+        if (editNotes) editNotes.value = '';
+        if (titleEl) titleEl.textContent = 'Učitavanje podataka...';
+        if (subTitleEl) subTitleEl.textContent = 'Dohvaćam detalje iz baze...';
+        if (avatarBox) avatarBox.innerHTML = '<span class="avatar-placeholder">⏳</span>';
+    }
+
+    if (strip) {
+        strip.style.display = 'none';
+        strip.innerHTML = '';
+    }
+
+    // Instantly display modal
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+
+    try {
+        let p = null;
+        let samples = [];
+
+        // Fetch full person details & face crop samples from API
+        if (isNum) {
+            const resp = await fetch(`${API_BASE}/api/v1/persons/${personIdOrName}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                p = data.person;
+                samples = p.samples || [];
+            }
+        }
+
+        // Fallback search by name if not found by ID
+        if (!p) {
+            const queryName = String(personIdOrName || (cached ? cached.name : '')).trim();
+            if (queryName) {
+                const resp = await fetch(`${API_BASE}/api/v1/persons?limit=5&query=${encodeURIComponent(queryName)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const list = data.persons || [];
+                    const exact = list.find(item => item.name.toLowerCase() === queryName.toLowerCase()) || list[0];
+                    if (exact) {
+                        const dResp = await fetch(`${API_BASE}/api/v1/persons/${exact.id}`);
+                        if (dResp.ok) {
+                            const dData = await dResp.json();
+                            p = dData.person;
+                            samples = p.samples || [];
+                        } else {
+                            p = exact;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!p && !cached) {
+            showToast('⚠️ Osoba nije pronađena u bazi.');
+            closePersonModal();
+            return;
+        }
+
+        if (p) {
+            currentEditingPerson = p;
+
+            // Populate updated fields
+            if (editId) editId.value = p.id;
+            if (editName) editName.value = p.name || '';
+            if (editNotes) editNotes.value = p.notes || '';
+            if (titleEl) titleEl.textContent = p.name || 'Osoba';
+            if (subTitleEl) subTitleEl.textContent = `ID #${p.id} • ${samples.length || p.sample_count || 1} uzoraka u bazi`;
+
+            const role = (p.role || 'standard').toLowerCase();
+            setEditModalRole(role);
+
+            // Date & meta
+            const createdDate = p.created_at ? p.created_at.slice(0, 10) : 'Nedavno';
+            const createdEl = document.getElementById('modalCreatedAtTxt');
+            if (createdEl) createdEl.textContent = `📅 Dodano: ${createdDate}`;
+
+            const sampleCountEl = document.getElementById('modalSampleCountTxt');
+            if (sampleCountEl) sampleCountEl.textContent = `📸 ${samples.length || p.sample_count || 1} uzorak/ka lica`;
+
+            // Avatar thumbnail
+            let avatarSrc = '';
+            if (samples.length > 0 && samples[0].crop_base64) {
+                avatarSrc = `data:image/jpeg;base64,${samples[0].crop_base64}`;
+            } else if (p.thumbnail_base64) {
+                avatarSrc = `data:image/jpeg;base64,${p.thumbnail_base64}`;
+            }
+
+            if (avatarBox) {
+                if (avatarSrc) {
+                    avatarBox.innerHTML = `<img src="${avatarSrc}" alt="${escapeHtml(p.name)}">`;
+                } else {
+                    avatarBox.innerHTML = '<span class="avatar-placeholder">👤</span>';
+                }
+            }
+
+            // Samples strip preview
+            if (strip && samples.length > 0) {
+                strip.innerHTML = samples.map(s => {
+                    const sSrc = s.crop_base64 ? `data:image/jpeg;base64,${s.crop_base64}` : '';
+                    return sSrc ? `<img class="modal-sample-thumb" src="${sSrc}" alt="Uzorak #${s.id}">` : '';
+                }).filter(Boolean).join('');
+                if (strip.children.length > 0) {
+                    strip.style.display = 'flex';
+                }
+            } else if (strip) {
+                strip.style.display = 'none';
+            }
+        }
+
+    } catch (err) {
+        console.error('Error fetching details for person modal:', err);
+        // If we already loaded cached info, KEEP MODAL OPEN!
+        if (!cached) {
+            showToast('❌ Greška pri dohvatu podataka: ' + err.message);
+            closePersonModal();
+        }
+    }
+}
+
+window.openPersonModal = openPersonModal;
+
+function setEditModalRole(role) {
+    const cleanRole = (role || 'standard').toLowerCase();
+    const roleBadge = document.getElementById('modalRoleBadge');
+    if (roleBadge) {
+        roleBadge.className = `modal-person-badge ${cleanRole}`;
+        roleBadge.textContent = cleanRole === 'blacklist' ? 'CRNA LISTA' : (cleanRole === 'vip' ? 'VIP' : 'STANDARD');
+    }
+
+    document.querySelectorAll('#editRoleSelector .role-btn').forEach(btn => {
+        if (btn.dataset.role === cleanRole) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+}
+
+function closePersonModal() {
+    triggerHaptic('light');
+    const modal = document.getElementById('personDetailModal');
+    if (!modal) return;
+    modal.classList.remove('active');
+    modal.style.display = 'none';
+    currentEditingPerson = null;
+}
+
+async function savePersonChanges() {
+    const personId = document.getElementById('editPersonId')?.value;
+    const nameInput = document.getElementById('editPersonName');
+    const notesInput = document.getElementById('editPersonNotes');
+    const activeRoleBtn = document.querySelector('#editRoleSelector .role-btn.active');
+
+    const newName = nameInput ? nameInput.value.trim() : '';
+    const newNotes = notesInput ? notesInput.value.trim() : '';
+    const newRole = activeRoleBtn ? activeRoleBtn.dataset.role : 'standard';
+
+    if (!personId) return;
+    if (!newName || newName.length < 2) {
+        triggerHaptic('warning');
+        showToast('⚠️ Ime mora imati najmanje 2 slova.');
+        nameInput?.focus();
+        return;
+    }
+
+    triggerHaptic('medium');
+    const saveBtn = document.getElementById('btnSavePersonModal');
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span class="spinner-small"></span><span>Spremam...</span>';
+    }
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/v1/persons/${personId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: newName,
+                role: newRole,
+                notes: newNotes
+            })
+        });
+
+        const resData = await resp.json();
+        if (!resp.ok) {
+            throw new Error(resData.detail || resData.error || `HTTP ${resp.status}`);
+        }
+
+        triggerHaptic('success');
+        showToast(`✅ Podaci za "${newName}" su uspješno ažurirani!`);
+        closePersonModal();
+
+        // Update local memory cache immediately
+        if (window._directoryPersons && window._directoryPersons[personId]) {
+            window._directoryPersons[personId].name = newName;
+            window._directoryPersons[personId].role = newRole;
+            window._directoryPersons[personId].notes = newNotes;
+        }
+
+        // Refresh database directory list
+        loadPersonsDirectory(currentPersonsFilter.query, currentPersonsFilter.role);
+
+        // Update any matching cards in current search results
+        if (window._lastSearchResults && Array.isArray(window._lastSearchResults)) {
+            let updatedAny = false;
+            window._lastSearchResults.forEach(f => {
+                if (String(f.person_id) === String(personId) || (currentEditingPerson && f.person_name === currentEditingPerson.name)) {
+                    f.person_name = newName;
+                    f.role = newRole;
+                    f.notes = newNotes;
+                    updatedAny = true;
+                }
+            });
+            if (updatedAny) {
+                const container = document.getElementById('scanResultCard');
+                if (container && container.style.display !== 'none' && state.capturedBlob) {
+                    renderScanResult({ results: window._lastSearchResults, faces_detected: window._lastSearchResults.length }, state.capturedBlob);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Error saving person changes:', err);
+        triggerHaptic('error');
+        showToast(`❌ Greška pri spremanju: ${err.message}`);
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                <span>SPREMI IZMJENE</span>
+            `;
+        }
+    }
+}
+
+function addPhotoToCurrentPerson() {
+    if (!currentEditingPerson) return;
+    const name = currentEditingPerson.name;
+    const role = currentEditingPerson.role || 'standard';
+    closePersonModal();
+    quickEnrollFor(name, role);
+}
+
+async function deleteCurrentPerson() {
+    if (!currentEditingPerson) return;
+    const p = currentEditingPerson;
+
+    if (!confirm(`Jeste li sigurni da želite trajno obrisati osobu "${p.name}" (ID #${p.id}) i sve njezine uzorke lica iz baze podataka?`)) {
+        return;
+    }
+
+    triggerHaptic('heavy');
+    try {
+        const resp = await fetch(`${API_BASE}/api/v1/persons/${p.id}`, {
+            method: 'DELETE'
+        });
+        const resData = await resp.json();
+        if (!resp.ok) {
+            throw new Error(resData.detail || resData.error || `HTTP ${resp.status}`);
+        }
+
+        triggerHaptic('success');
+        showToast(`🗑️ Osoba "${p.name}" je obrisana iz baze.`);
+        closePersonModal();
+        loadPersonsDirectory(currentPersonsFilter.query, currentPersonsFilter.role);
+        loadSystemStatus();
+    } catch (err) {
+        console.error('Error deleting person:', err);
+        triggerHaptic('error');
+        showToast(`❌ Greška pri brisanju: ${err.message}`);
+    }
+}
+
+// =========================================================================
+// =========================================================================
+// 1b. IN-APP CAMERA & GALLERY SELECTION HELPERS
+// =========================================================================
+
+let liveCameraStream = null;
+let currentCameraFacing = 'environment';
+let activeCameraTarget = 'scan';
+let isTorchOn = false;
+
+async function openLiveCamera(target = 'scan') {
+    activeCameraTarget = target;
+    const modal = document.getElementById('cameraModal');
+    const video = document.getElementById('cameraVideo');
+    if (!modal || !video) return;
+
+    modal.classList.add('active');
+    triggerHaptic('light');
+
+    // 1. Check if we already have an authorized live stream to reuse without re-prompting!
+    const activeTrack = liveCameraStream?.getVideoTracks()?.[0];
+    if (activeTrack && activeTrack.readyState === 'live') {
+        activeTrack.enabled = true;
+        try {
+            if (video.srcObject !== liveCameraStream) {
+                video.srcObject = liveCameraStream;
+            }
+            await video.play();
+            return;
+        } catch (e) {
+            console.warn('Reusing active track failed, requesting fresh stream:', e);
+        }
+    }
+
+    // 2. Request stream once (Telegram will prompt permission once per session)
+    try {
+        const constraints = {
+            video: {
+                facingMode: { ideal: currentCameraFacing },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
+            },
+            audio: false
+        };
+        liveCameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = liveCameraStream;
+        await video.play();
+    } catch (err) {
+        console.warn('getUserMedia error:', err);
+        closeLiveCamera(true);
+        showToast('⚠️ Kamera nije dostupna, biram iz galerije...');
+        triggerGalleryPicker(target);
+    }
+}
+
+function closeLiveCamera(forceStop = false) {
+    const modal = document.getElementById('cameraModal');
+    const video = document.getElementById('cameraVideo');
+
+    if (video) {
+        try { video.pause(); } catch (e) {}
+    }
+
+    if (liveCameraStream) {
+        if (forceStop) {
+            // Completely terminate tracks on explicit camera switch or page close
+            liveCameraStream.getTracks().forEach(t => t.stop());
+            liveCameraStream = null;
+        } else {
+            // Keep permission session alive, but pause hardware sensor/LED
+            liveCameraStream.getVideoTracks().forEach(t => {
+                t.enabled = false;
+            });
+        }
+    }
+
+    if (modal) modal.classList.remove('active');
+    isTorchOn = false;
+}
+
+function takeLiveSnapshot() {
+    const video = document.getElementById('cameraVideo');
+    if (!video || !video.videoWidth) return;
+
+    triggerHaptic('heavy');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+        if (!blob) return;
+        const file = new File([blob], `capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        // Close modal and pause sensor, keeping permission authorization cached!
+        closeLiveCamera(false);
+
+        if (activeCameraTarget === 'scan') {
+            handleScanFile(file);
+        } else if (activeCameraTarget === 'compare1') {
+            handleCompareFile(1, file);
+        } else if (activeCameraTarget === 'compare2') {
+            handleCompareFile(2, file);
+        } else if (activeCameraTarget === 'enroll') {
+            handleEnrollFile(file);
+        }
+    }, 'image/jpeg', 0.95);
+}
+
+function flipCameraFacing() {
+    triggerHaptic('light');
+    currentCameraFacing = (currentCameraFacing === 'environment') ? 'user' : 'environment';
+    // Force stop existing track to switch facing mode
+    closeLiveCamera(true);
+    openLiveCamera(activeCameraTarget);
+}
+
+window.addEventListener('beforeunload', () => {
+    closeLiveCamera(true);
+});
+
+async function toggleCameraTorch() {
+    if (!liveCameraStream) return;
+    const track = liveCameraStream.getVideoTracks()[0];
+    if (!track) return;
+    try {
+        isTorchOn = !isTorchOn;
+        await track.applyConstraints({
+            advanced: [{ torch: isTorchOn }]
+        });
+        triggerHaptic('light');
+    } catch (e) {
+        console.log('Torch not supported on this track');
+    }
+}
+
+function triggerGalleryPicker(target = 'scan') {
+    let inputId = 'fileInputScanGallery';
+    if (target === 'compare1') inputId = 'fileSlot1';
+    else if (target === 'compare2') inputId = 'fileSlot2';
+    else if (target === 'enroll') inputId = 'fileEnrollGallery';
+
+    const inp = document.getElementById(inputId);
+    if (inp) {
+        inp.value = '';
+        inp.click();
+    }
+}
+
 // 7. NAVIGATION & GLOBAL EVENT WIRING
 // =========================================================================
 
@@ -1000,20 +1541,34 @@ document.addEventListener('DOMContentLoaded', () => {
     // Tab 1: Photo Scan actions
     const scanUploadZone = document.getElementById('scanUploadZone');
     const fileInputScan = document.getElementById('fileInputScan');
+    const fileInputScanCamera = document.getElementById('fileInputScanCamera');
+    const fileInputScanGallery = document.getElementById('fileInputScanGallery');
+    const btnScanCamera = document.getElementById('btnScanCamera');
+    const btnScanGallery = document.getElementById('btnScanGallery');
     const btnRemoveScanPhoto = document.getElementById('btnRemoveScanPhoto');
     const btnExecuteSearch = document.getElementById('btnExecuteSearch');
 
-    scanUploadZone?.addEventListener('click', (e) => {
-        if (e.target.closest('#btnRemoveScanPhoto')) return;
-        triggerHaptic('light');
-        fileInputScan?.click();
+    // Clean input values when clicked so selecting same photo triggers change
+    document.querySelectorAll('input[type="file"]').forEach(inp => {
+        inp.addEventListener('click', (e) => {
+            e.stopPropagation();
+            inp.value = '';
+        });
     });
 
     fileInputScan?.addEventListener('change', (e) => {
         const file = e.target.files?.[0];
-        if (file) {
-            handleScanFile(file);
-        }
+        if (file) handleScanFile(file);
+    });
+
+    fileInputScanCamera?.addEventListener('change', (e) => {
+        const file = e.target.files?.[0];
+        if (file) handleScanFile(file);
+    });
+
+    fileInputScanGallery?.addEventListener('change', (e) => {
+        const file = e.target.files?.[0];
+        if (file) handleScanFile(file);
     });
 
     btnRemoveScanPhoto?.addEventListener('click', (e) => {
@@ -1027,23 +1582,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Compare file listeners
     document.getElementById('fileSlot1')?.addEventListener('change', (e) => handleCompareFile(1, e.target.files?.[0]));
+    document.getElementById('fileSlot1Camera')?.addEventListener('change', (e) => handleCompareFile(1, e.target.files?.[0]));
     document.getElementById('fileSlot2')?.addEventListener('change', (e) => handleCompareFile(2, e.target.files?.[0]));
+    document.getElementById('fileSlot2Camera')?.addEventListener('change', (e) => handleCompareFile(2, e.target.files?.[0]));
     document.getElementById('btnRunCompare')?.addEventListener('click', runComparison);
 
-    // Enroll actions
-    document.getElementById('enrollPhotoPicker')?.addEventListener('click', () => {
-        triggerHaptic('light');
-        document.getElementById('fileEnroll')?.click();
-    });
-    document.getElementById('fileEnroll')?.addEventListener('change', (e) => handleEnrollFile(e.target.files?.[0]));
+    // Enroll actions (handled natively via label for="...")
 
-    document.querySelectorAll('.role-btn').forEach(b => {
+    document.getElementById('fileEnroll')?.addEventListener('change', (e) => handleEnrollFile(e.target.files?.[0]));
+    document.getElementById('fileEnrollCamera')?.addEventListener('change', (e) => handleEnrollFile(e.target.files?.[0]));
+    document.getElementById('fileEnrollGallery')?.addEventListener('change', (e) => handleEnrollFile(e.target.files?.[0]));
+
+    document.querySelectorAll('.enroll-form .role-btn').forEach(b => {
         b.addEventListener('click', () => {
             triggerHaptic('light');
-            document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.enroll-form .role-btn').forEach(btn => btn.classList.remove('active'));
             b.classList.add('active');
             state.selectedRole = b.dataset.role;
         });
+    });
+
+    document.querySelectorAll('#editRoleSelector .role-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            triggerHaptic('light');
+            document.querySelectorAll('#editRoleSelector .role-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const role = btn.dataset.role || 'standard';
+            const roleBadge = document.getElementById('modalRoleBadge');
+            if (roleBadge) {
+                roleBadge.className = `modal-person-badge ${role}`;
+                roleBadge.textContent = role === 'blacklist' ? 'CRNA LISTA' : (role === 'vip' ? 'VIP' : 'STANDARD');
+            }
+        });
+    });
+
+    // Person edit modal close listeners
+    document.getElementById('btnClosePersonModal')?.addEventListener('click', closePersonModal);
+    document.getElementById('personDetailModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'personDetailModal') {
+            closePersonModal();
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closePersonModal();
+        }
     });
 
     document.getElementById('btnSubmitEnroll')?.addEventListener('click', submitEnrollment);

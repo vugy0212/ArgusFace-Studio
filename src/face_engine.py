@@ -1,6 +1,22 @@
 import os
+import sys
 import cv2
 import numpy as np
+
+# Ensure 'face_engine' and 'src.face_engine' always resolve to the exact same module singleton
+sys.modules.setdefault("face_engine", sys.modules[__name__])
+sys.modules.setdefault("src.face_engine", sys.modules[__name__])
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 try:
     import faiss
@@ -287,9 +303,11 @@ class FaceIndex:
         if HAS_FAISS:
             try:
                 dim = 512
-                # If >= 1,000 vectors, use HNSW graph index; otherwise exact FlatIP
-                if self.total_samples >= 1000:
+                # Use exact IndexFlatIP up to 50,000 vectors (< 0.5 ms and 100% exact recall);
+                # use HNSW graph index with efSearch=128 only for huge datasets >= 50,000 vectors.
+                if self.total_samples >= 50000:
                     self.faiss_samples_index = faiss.IndexHNSWFlat(dim, 32, faiss.METRIC_INNER_PRODUCT)
+                    self.faiss_samples_index.hnsw.efSearch = 128
                     self.backend = f"FAISS HNSW v{faiss.__version__} (Graph Index)"
                 else:
                     self.faiss_samples_index = faiss.IndexFlatIP(dim)
@@ -297,8 +315,9 @@ class FaceIndex:
 
                 self.faiss_samples_index.add(self.samples_matrix)
 
-                if self.num_persons >= 1000:
+                if self.num_persons >= 50000:
                     self.faiss_centroids_index = faiss.IndexHNSWFlat(dim, 32, faiss.METRIC_INNER_PRODUCT)
+                    self.faiss_centroids_index.hnsw.efSearch = 128
                 else:
                     self.faiss_centroids_index = faiss.IndexFlatIP(dim)
 
@@ -459,6 +478,10 @@ class FaceIndex:
             "num_persons": self.num_persons,
             "dimension": 512
         }
+
+    def rebuild(self):
+        """Rebuilds the global face index from fresh database embeddings."""
+        return get_face_index(force_refresh=True)
 
 _face_index = None
 

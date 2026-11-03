@@ -107,13 +107,17 @@ def generate_detection_cards_html(results, show_all_faces=False):
         status = r.get("status", "Nepoznat")
         name = r.get("best_name", "Nepoznata osoba")
 
-        # Determine person role badge
+        # Determine person role badge and notes
         p_role = "standard"
+        p_notes = ""
         if status in ("Prepoznat", "Moguće poklapanje") and name not in ("Nepoznata osoba", "Nepoznato"):
             try:
-                p_role = db.get_person_role(name)
+                p_info = db.get_person_info(name)
+                p_role = p_info.get("role", "standard")
+                p_notes = p_info.get("notes", "")
             except Exception:
                 p_role = "standard"
+                p_notes = ""
 
         stroke_color = "#10B981"
         if p_role == "blacklist":
@@ -147,6 +151,16 @@ def generate_detection_cards_html(results, show_all_faces=False):
             meta_parts.append(f'<span>{safe_gender}</span>')
         meta_html = ' <span class="meta-sep">•</span> '.join(meta_parts)
 
+        notes_html = ""
+        if p_notes:
+            safe_notes = html.escape(p_notes)
+            notes_html = f'''
+                <div class="card-notes" title="{safe_notes}">
+                    <svg class="card-notes-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                    <span class="card-notes-text">{safe_notes}</span>
+                </div>
+            '''
+
         circ_svg = f"""
         <div class="circle-gauge" title="Pouzdanost: {pct:.1f}%">
             <svg viewBox="0 0 36 36" class="circular-chart">
@@ -170,6 +184,7 @@ def generate_detection_cards_html(results, show_all_faces=False):
                 <div class="card-meta">
                     {meta_html}
                 </div>
+                {notes_html}
             </div>
             {circ_svg}
         </div>
@@ -846,6 +861,30 @@ td, .dataframe tbody tr td {
     gap: 4px !important;
     font-size: 0.72rem !important;
     color: #8B949E !important;
+}
+
+.card-notes {
+    display: flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    font-size: 0.72rem !important;
+    color: #94A3B8 !important;
+    margin-top: 1px !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+
+.card-notes-icon {
+    flex-shrink: 0 !important;
+    color: #38BDF8 !important;
+    opacity: 0.85 !important;
+}
+
+.card-notes-text {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    min-width: 0 !important;
 }
 
 .meta-time {

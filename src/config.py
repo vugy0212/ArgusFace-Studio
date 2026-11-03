@@ -1,7 +1,12 @@
 import os
+import sys
 import json
 import shutil
 import subprocess
+
+# Ensure 'config' and 'src.config' always resolve to the exact same module singleton
+sys.modules.setdefault("config", sys.modules[__name__])
+sys.modules.setdefault("src.config", sys.modules[__name__])
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(APP_DIR, "data")

@@ -52,6 +52,9 @@ def get_events_ui_data(search_query=""):
             first_video = v_p
             v_tag = f"\n* **📹 NVR Video snimka:** `{os.path.basename(v_p)}` (Detekcija na: **`{v_off:.1f}s`**)"
 
+        p_info_first = db.get_person_info(first_ev.get("person_name", ""))
+        first_notes_tag = f"\n* **📝 Bilješka:** {p_info_first['notes']}" if p_info_first.get("notes") else ""
+
         first_info = (
             f"### 📋 Detalji odabranog prolaska #{first_id}\n"
             f"* **Prepoznata osoba:** **`{first_ev['person_name']}`**\n"
@@ -59,6 +62,7 @@ def get_events_ui_data(search_query=""):
             f"* **Pouzdanost / Sličnost:** **`{first_ev['similarity']*100:.1f}%`**\n"
             f"* **Izvor / Kamera:** `{first_ev['source_label']}`\n"
             f"* **Prikaz slike:** {cam_desc}"
+            f"{first_notes_tag}"
             f"{v_tag}"
         )
         
@@ -88,6 +92,9 @@ def on_event_select(evt: gr.SelectData, search_query=""):
         if has_video:
             v_tag = f"\n* **📹 NVR Video snimka:** `{os.path.basename(v_p)}` (Detekcija na: **`{v_off:.1f}s`**)"
 
+        p_info_ev = db.get_person_info(ev.get("person_name", ""))
+        ev_notes_tag = f"\n* **📝 Bilješka:** {p_info_ev['notes']}" if p_info_ev.get("notes") else ""
+
         info = (
             f"### 📋 Detalji prolaska #{ev_id}\n"
             f"* **Prepoznata osoba:** **`{ev['person_name']}`**\n"
@@ -95,6 +102,7 @@ def on_event_select(evt: gr.SelectData, search_query=""):
             f"* **Pouzdanost / Sličnost:** **`{sim_pct}`**\n"
             f"* **Izvor / Kamera:** `{ev['source_label']}`\n"
             f"* **Prikaz slike:** {cam_desc}"
+            f"{ev_notes_tag}"
             f"{v_tag}"
         )
         return main_img, crop_img, info, gr.update(value=v_p if has_video else None, visible=has_video), ev_id, gr.update(value=f"🗑️ Obriši ovaj prolazak (#{ev_id})", visible=True)

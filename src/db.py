@@ -1,7 +1,13 @@
 import sqlite3
 import os
+import sys
+import struct
 from contextlib import contextmanager
 import numpy as np
+
+# Ensure 'db' and 'src.db' always resolve to the exact same module singleton in sys.modules
+sys.modules.setdefault("db", sys.modules[__name__])
+sys.modules.setdefault("src.db", sys.modules[__name__])
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "database.db")
 
@@ -10,16 +16,30 @@ _cached_db_version = None
 _cached_db_mtime = 0.0
 _cache_invalidation_callbacks = []
 
-def get_db_version() -> int:
-    """Returns SQLite data_version to detect changes made by any process."""
+def get_db_version() -> tuple:
+    """
+    Returns a cross-process database state signature combining:
+      1. SQLite file header change counter (bytes 24..28, incremented by SQLite on every commit)
+      2. Main DB file mtime_ns and byte size
+      3. Optional WAL file mtime_ns and byte size
+    """
     if not os.path.isfile(DB_PATH):
-        return 0
+        return (0, 0, 0, 0, 0)
     try:
-        with get_db() as conn:
-            row = conn.execute("PRAGMA data_version;").fetchone()
-            return int(row[0]) if row else 0
+        st = os.stat(DB_PATH)
+        change_counter = 0
+        if st.st_size >= 28:
+            with open(DB_PATH, "rb") as f:
+                f.seek(24)
+                change_counter = struct.unpack(">I", f.read(4))[0]
+        wal_path = DB_PATH + "-wal"
+        wal_mtime, wal_size = 0, 0
+        if os.path.isfile(wal_path):
+            wst = os.stat(wal_path)
+            wal_mtime, wal_size = wst.st_mtime_ns, wst.st_size
+        return (change_counter, st.st_mtime_ns, st.st_size, wal_mtime, wal_size)
     except Exception:
-        return 0
+        return (0, 0, 0, 0, 0)
 
 def get_db_mtime() -> float:
     """Returns DB file modification timestamp."""
@@ -47,25 +67,21 @@ def invalidate_cache():
 
 def check_and_refresh_cache_if_needed() -> bool:
     """
-    Checks if database on disk was modified by any process (e.g. desktop GUI app).
-    Returns True if cache was invalidated and reloaded, False otherwise.
+    Checks if database on disk was modified by any process (e.g. desktop GUI app or API server).
+    Returns True if cache was invalidated, False otherwise.
     """
     global _cached_embeddings, _cached_db_version, _cached_db_mtime
     if _cached_embeddings is None:
         return False
 
     current_mtime = get_db_mtime()
-    # Fast path: if file mtime hasn't changed, DB hasn't changed
-    if current_mtime == _cached_db_mtime and _cached_db_mtime > 0:
-        return False
-
     current_version = get_db_version()
-    if _cached_db_version is not None and current_version != _cached_db_version:
+
+    if (_cached_db_version is not None and current_version != _cached_db_version) or (
+        _cached_db_mtime > 0 and current_mtime != _cached_db_mtime
+    ):
         invalidate_cache()
         return True
-    elif current_mtime != _cached_db_mtime:
-        _cached_db_mtime = current_mtime
-        _cached_db_version = current_version
     return False
 
 @contextmanager
@@ -192,13 +208,22 @@ def update_person(person_id: int, name: str, notes: str = "", role: str = "stand
                 conn.execute("UPDATE detection_events SET person_name = ? WHERE person_name = ?", (name, old_name))
     invalidate_cache()
 
+def get_person_info(name: str) -> dict:
+    """Returns {'role': str, 'notes': str} for a person by name."""
+    if not name:
+        return {"role": "standard", "notes": ""}
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(role, 'standard') as role, COALESCE(notes, '') as notes FROM persons WHERE LOWER(name) = LOWER(?)",
+            (name.strip(),)
+        ).fetchone()
+        if row:
+            return {"role": str(row["role"]).lower(), "notes": str(row["notes"] or "").strip()}
+        return {"role": "standard", "notes": ""}
+
 def get_person_role(name: str) -> str:
     """Returns the role ('standard', 'vip', 'blacklist') of person by name."""
-    if not name:
-        return "standard"
-    with get_db() as conn:
-        row = conn.execute("SELECT COALESCE(role, 'standard') as role FROM persons WHERE LOWER(name) = LOWER(?)", (name.strip(),)).fetchone()
-        return str(row["role"]).lower() if row else "standard"
+    return get_person_info(name).get("role", "standard")
 
 def add_face_sample(person_id: int, image_path: str, crop_path: str, embedding: np.ndarray, confidence: float = 1.0) -> int:
     embedding_bytes = np.ascontiguousarray(embedding, dtype=np.float32).tobytes()

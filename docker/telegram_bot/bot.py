@@ -104,7 +104,7 @@ NOTES_MARKUP = ReplyKeyboardMarkup(NOTES_KEYBOARD, resize_keyboard=True)
 ADMIN_MENU_KEYBOARD = [
     ["🗂️ Baza registriranih osoba", "👥 Popis bot korisnika"],
     ["➕ Dodaj korisnika", "❌ Ukloni korisnika"],
-    ["🔑 Promijeni PIN", "🔙 Povratak u glavni meni"]
+    ["🔙 Povratak u glavni meni"]
 ]
 ADMIN_MENU_MARKUP = ReplyKeyboardMarkup(ADMIN_MENU_KEYBOARD, resize_keyboard=True)
 
@@ -204,12 +204,11 @@ def get_main_inline_menu(user_id: int) -> InlineKeyboardMarkup:
     if is_admin(user_id):
         buttons.append([
             InlineKeyboardButton("⚙️ Admin panel", callback_data="nav_admin"),
-            InlineKeyboardButton("🔒 Zaključaj sesiju", callback_data="nav_lock")
+            InlineKeyboardButton("ℹ️ Pomoć", callback_data="nav_help")
         ])
     else:
         buttons.append([
-            InlineKeyboardButton("ℹ️ Pomoć", callback_data="nav_help"),
-            InlineKeyboardButton("🔒 Zaključaj sesiju", callback_data="nav_lock")
+            InlineKeyboardButton("ℹ️ Pomoć", callback_data="nav_help")
         ])
     return InlineKeyboardMarkup(buttons)
 
@@ -234,7 +233,6 @@ def get_admin_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("❌ Ukloni korisnika", callback_data="admin_del_info")
         ],
         [
-            InlineKeyboardButton("🔑 PIN i sigurnost", callback_data="admin_pin_info"),
             InlineKeyboardButton("🔙 Glavni izbornik", callback_data="nav_main_menu")
         ]
     ])
@@ -268,33 +266,7 @@ def format_welcome_text(user_first_name: str, chat_id: int) -> str:
     )
 
 def check_authentication(chat_id: int) -> tuple[bool, str]:
-    """Checks if session is authenticated with PIN and not expired or blocked."""
-    cfg = get_remote_bot_config()
-    pin = cfg.get("pin", "")
-    timeout_min = cfg.get("session_timeout_minutes", 30)
-
-    if not pin:
-        return True, ""  # No PIN configured -> open
-
-    # Check bruteforce lockout
-    if chat_id in failed_attempts:
-        blocked_until = failed_attempts[chat_id].get("blocked_until", 0)
-        if time.time() < blocked_until:
-            remaining = int(blocked_until - time.time())
-            return False, f"⏳ **Privremena blokada:** Previše netočnih unosa PIN-a.\nPokušajte ponovno za `{remaining} sekundi`."
-
-    # Check active session
-    if chat_id not in authenticated_sessions:
-        return False, "🔒 **Sustav je zaključan.**\n\nMolimo unesite **sigurnosni PIN** za pristup biometrijskom sustavu:"
-
-    # Check session timeout
-    if timeout_min > 0:
-        last_active = authenticated_sessions[chat_id]
-        if (time.time() - last_active) > (timeout_min * 60):
-            del authenticated_sessions[chat_id]
-            return False, "⏳ **Sesija je istekla zbog neaktivnosti.**\n\nMolimo ponovno unesite **sigurnosni PIN** za nastavak rada:"
-
-    authenticated_sessions[chat_id] = time.time()
+    """Session locking is disabled; authorized users have direct continuous access."""
     return True, ""
 
 # =========================================================================
@@ -320,7 +292,7 @@ async def send_unauthorized_message(update: Update, context: ContextTypes.DEFAUL
         await update.callback_query.message.reply_text(msg_text, reply_markup=markup, parse_mode=constants.ParseMode.MARKDOWN)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Greets user, verifies authorization and PIN, and reveals main menu."""
+    """Greets user, verifies authorization, and reveals main menu."""
     user = update.effective_user
     chat_id = update.effective_chat.id
 
@@ -328,88 +300,81 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_unauthorized_message(update, context)
         return
 
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(
-            f"👋 Pozdrav, **{user.first_name}**!\n\n"
-            f"🤖 **ArgusFace AI Asistent** je zaštićen sigurnosnim PIN-om.\n\n"
-            f"{lock_msg}",
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
-        return
+    context.user_data.clear()
 
-    await update.message.reply_text("✨", reply_markup=ReplyKeyboardRemove())
-    welcome_text = format_welcome_text(user.first_name, chat_id)
-    await update.message.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+    # Auto-promote first authorized user to Admin if no admin exists yet
+    cfg = get_remote_bot_config()
+    if not cfg.get("admin_chat_ids"):
+        try:
+            admin_name = f"{user.first_name} {user.last_name or ''}".strip() or "Administrator"
+            requests.post(
+                f"{ARGUSFACE_API_URL}/api/v1/bot/users/add",
+                data={"chat_id": chat_id, "name": admin_name, "role": "admin"},
+                headers=get_api_headers(),
+                timeout=5
+            )
+            get_remote_bot_config(force=True)
+        except Exception as e:
+            logger.warning(f"Neuspjelo automatsko postavljanje administratora: {e}")
+
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text("✨", reply_markup=ReplyKeyboardRemove())
+        welcome_text = format_welcome_text(user.first_name, chat_id)
+        await msg.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+    return ConversationHandler.END
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the main interactive card menu."""
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id):
         await send_unauthorized_message(update, context)
-        return
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
+        return ConversationHandler.END
+    context.user_data.clear()
     user = update.effective_user
-    await update.message.reply_text("✨", reply_markup=ReplyKeyboardRemove())
-    welcome_text = format_welcome_text(user.first_name, chat_id)
-    await update.message.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
-
-async def lock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Locks user session immediately."""
-    chat_id = update.effective_chat.id
-    authenticated_sessions.pop(chat_id, None)
-    await update.message.reply_text(
-        "🔒 **Sustav je uspješno zaključan.**\n\nZa ponovni pristup unesite svoj sigurnosni PIN:",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text("✨", reply_markup=ReplyKeyboardRemove())
+        welcome_text = format_welcome_text(user.first_name, chat_id)
+        await msg.reply_text(welcome_text, reply_markup=get_main_inline_menu(chat_id), parse_mode=constants.ParseMode.MARKDOWN)
+    return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays user guidance."""
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id):
-        return
+        return ConversationHandler.END
 
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
-
+    context.user_data.clear()
     help_text = (
         "📖 **ArgusFace AI Asistent - Upute za rad**\n\n"
         "1️⃣ **Pretraga u bazi (1:N):**\n"
         "Pošaljite fotografiju jedne ili više osoba. Sustav detektira lica, "
         "uspoređuje ih s bazom na računalu i javlja ime, status (Crna lista / VIP / Djelatnik), "
-        "postotak podudaranja, procjenu dobi i autentičnost lica (anti-spoofing).\n\n"
+        "postotak podudaranja i autentičnost lica (anti-spoofing).\n\n"
         "2️⃣ **Usporedba 2 slike (1:1):**\n"
         "Kliknite '⚖️ Usporedi 2 slike' i pošaljite dvije uzastopne fotografije. "
         "AI model izvlači biometrijske točke i daje postotak sličnosti i presudu.\n\n"
         "3️⃣ **Dodavanje nove osobe u bazu (Enrollment):**\n"
-        "Kliknite '➕ Dodaj novu osobu' i pratite jednostavna 3 koraka:\n"
-        "• Pošaljite fotografiju lica\n"
+        "Kliknite '➕ Registriraj osobu' i pratite jednostavna 3 koraka:\n"
         "• Upišite ime i prezime\n"
-        "• Odaberite status (Standard / VIP / Crna lista) i unesite bilješke.\n\n"
-        "4️⃣ **Administracija i sigurnost:**\n"
-        "• Administratori kroz '⚙️ Admin panel' mogu dodavati ili uklanjati korisnike te mijenjati PIN.\n"
-        "• Gumb '🔒 Zaključaj' omogućuje trenutnu odjavu."
+        "• Odaberite status (Standard / VIP / Crna lista) i unesite bilješke\n"
+        "• Pošaljite 1 do 3 fotografije lica.\n\n"
+        "4️⃣ **Administracija:**\n"
+        "• Administratori kroz '⚙️ Admin panel' mogu dodavati ili uklanjati ovlaštene korisnike."
     )
-    await update.message.reply_text(help_text, reply_markup=get_back_to_main_menu(), parse_mode=constants.ParseMode.MARKDOWN)
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text(help_text, reply_markup=get_back_to_main_menu(), parse_mode=constants.ParseMode.MARKDOWN)
+    return ConversationHandler.END
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetches and displays host system status from the API."""
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id):
-        return
+        return ConversationHandler.END
 
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
-
+    context.user_data.clear()
     await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
 
     url = f"{ARGUSFACE_API_URL}/api/v1/status"
@@ -427,7 +392,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📸 **Broj spremljenih uzoraka lica:** `{data.get('total_samples', 0)}`\n"
                 f"⚡ **Vektorski indeks:** `{data.get('index_backend', 'N/A')}` ({faiss_txt})\n"
                 f"🛡️ **Anti-Spoofing (Liveness):** {spoof_txt}\n"
-                f"🔐 **PIN Zaštita bota:** `🟢 Aktivna (Timeout: {cfg.get('session_timeout_minutes', 30)} min)`\n"
                 f"👥 **Ovlaštenih korisnika bota:** `{len(cfg.get('allowed_users', []))}`\n"
                 f"🌐 **Poveznica:** `{ARGUSFACE_API_URL}`"
             )
@@ -441,7 +405,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         status_text = f"❌ Greška pri provjeri statusa: {str(e)}"
 
-    await update.message.reply_text(status_text, reply_markup=get_status_inline_menu(), parse_mode=constants.ParseMode.MARKDOWN)
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text(status_text, reply_markup=get_status_inline_menu(), parse_mode=constants.ParseMode.MARKDOWN)
+    return ConversationHandler.END
 
 def get_effective_webapp_url() -> str:
     """Reads latest Cloudflare tunnel URL if available, else falls back to configured URL."""
@@ -499,7 +466,8 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_pin = cfg.get("pin", "121977")
     effective_url = get_effective_webapp_url()
     sep = "&" if "?" in effective_url else "?"
-    authed_url = f"{effective_url}{sep}auth=1&chat_id={chat_id}"
+    ts = int(time.time())
+    authed_url = f"{effective_url}{sep}auth=1&chat_id={chat_id}&_v={ts}"
 
     keyboard = []
     if effective_url.startswith("https://"):
@@ -522,7 +490,7 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• ➕ **Registracija lica**: Brzo dodavanje novih osoba u bazu\n"
         "• 📊 **Status & Nadzor**: Pregled stanja motora i baze u stvarnom vremenu\n\n"
         f"🔗 **Poveznica:**\n`{authed_url}`\n\n"
-        "🔓 *Pristup je automatski odobren (PIN je već unesen u botu).*"
+        "🔓 *Pristup je automatski odobren.*"
     )
 
     if update.callback_query:
@@ -539,26 +507,25 @@ async def admin_panel_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the Admin Panel menu (admin only)."""
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id) or not is_admin(chat_id):
-        await update.message.reply_text("⛔ Nemate administratorske ovlasti.", reply_markup=get_main_menu(chat_id))
-        return
+        msg = update.effective_message
+        if msg:
+            await msg.reply_text("⛔ Nemate administratorske ovlasti.", reply_markup=get_main_menu(chat_id))
+        return ConversationHandler.END
 
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
-
+    context.user_data.clear()
     cfg = get_remote_bot_config(force=True)
     total_u = len(cfg.get("allowed_users", []))
 
-    await update.message.reply_text(
-        "⚙️ **ArgusFace - Administracijski Panel**\n\n"
-        f"• Ukupno ovlaštenih korisnika: **{total_u}**\n"
-        f"• Trenutni PIN: `{cfg.get('pin', 'N/A')}`\n"
-        f"• Automatsko zaključavanje: `{cfg.get('session_timeout_minutes', 30)} min`\n\n"
-        "Odaberite željenu administratorsku radnju:",
-        reply_markup=get_admin_inline_menu(),
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text(
+            "⚙️ **ArgusFace - Administracijski Panel**\n\n"
+            f"• Ukupno ovlaštenih korisnika: **{total_u}**\n\n"
+            "Odaberite željenu administratorsku radnju:",
+            reply_markup=get_admin_inline_menu(),
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+    return ConversationHandler.END
 
 async def admin_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lists all authorized users."""
@@ -673,7 +640,7 @@ async def admin_add_user_role(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"👤 **Ime:** `{name}`\n"
                 f"🆔 **Chat ID:** `{new_chat_id}`\n"
                 f"🏷️ **Uloga:** {role_label}\n\n"
-                f"✨ Korisnik sada može otvoriti bota, unijeti PIN i započeti s radom."
+                f"✨ Korisnik sada može otvoriti bota i započeti s radom."
             )
         else:
             out_msg = f"⚠️ Greška API-ja: HTTP {resp.status_code} ({resp.text})"
@@ -901,17 +868,26 @@ async def compare_photo_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     verdict_icon = "❌"
                     verdict_title = "**ODBIJENO: Nije ista osoba.**"
 
-                f1_desc = f"Slika 1: ~{f1.get('age', '-')} god ({f1.get('gender', '-')})"
-                f2_desc = f"Slika 2: ~{f2.get('age', '-')} god ({f2.get('gender', '-')})"
+                f1_age = f1.get("age")
+                f1_gen = f1.get("gender")
+                f2_age = f2.get("age")
+                f2_gen = f2.get("gender")
+                bio_block = ""
+                if (f1_age and str(f1_age).lower() != "none") or (f2_age and str(f2_age).lower() != "none"):
+                    f1_desc = f"Slika 1: ~{f1_age or '-'} god ({f1_gen or '-'})"
+                    f2_desc = f"Slika 2: ~{f2_age or '-'} god ({f2_gen or '-'})"
+                    bio_block = (
+                        f"\n\n👤 **Procjena lica:**\n"
+                        f"• {f1_desc}\n"
+                        f"• {f2_desc}"
+                    )
 
                 sim_bar = make_sim_bar(sim_pct)
                 out_msg = (
                     f"{verdict_icon} {verdict_title}\n\n"
                     f"📊 **Biometrijska sličnost:** {sim_bar}\n"
-                    f"🎯 **Pouzdanost ocjene:** `{conf}` (Sigurnosni prag: `{thresh_val}%`)\n\n"
-                    f"👤 **Procjena lica:**\n"
-                    f"• {f1_desc}\n"
-                    f"• {f2_desc}"
+                    f"🎯 **Pouzdanost ocjene:** `{conf}` (Sigurnosni prag: `{thresh_val}%`)"
+                    f"{bio_block}"
                 )
         else:
             out_msg = f"⚠️ Greška API poslužitelja: HTTP {resp.status_code} ({resp.text})"
@@ -1264,8 +1240,8 @@ async def enroll_submit_workflow(update: Update, context: ContextTypes.DEFAULT_T
                 p_role = res.get("role")
                 added_count = res.get("added_samples_count", len(photos))
                 total_s = res.get("total_samples", added_count)
-                age = res.get("age", "-")
-                gender = res.get("gender", "-")
+                age = res.get("age")
+                gender = res.get("gender")
                 is_real = res.get("is_real", True)
                 liveness_conf = int(res.get("liveness_conf", 1.0) * 100)
 
@@ -1276,13 +1252,19 @@ async def enroll_submit_workflow(update: Update, context: ContextTypes.DEFAULT_T
                 else:
                     role_badge = "🟢 **STANDARDNI ČLAN / ZAPOSLENIK**"
 
+                bio_line = ""
+                if (age is not None and str(age).lower() != "none") or (gender and str(gender).lower() != "none"):
+                    bio_parts = [p for p in [f"~{age} god" if age else "", gender or ""] if p]
+                    if bio_parts:
+                        bio_line = f"📐 **Procjena lica:** `{', '.join(bio_parts)}`\n"
+
                 out_msg = (
                     "🎉 **Osoba je uspješno registrirana u bazi!**\n\n"
                     f"👤 **Ime i prezime:** `{p_name}`\n"
                     f"🏷️ **Status:** {role_badge}\n"
                     f"📝 **Bilješke:** `{notes}`\n"
                     f"📸 **Uspješno spremljeno slika:** `{added_count}` (Ukupno u profilu: `{total_s}`)\n"
-                    f"📐 **Procjena lica:** `~{age} god, {gender}`\n"
+                    f"{bio_line}"
                     f"🛡️ **Liveness provjera:** `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({liveness_conf}%)`\n\n"
                     f"✨ *Vektorski FAISS indeks na računalu je automatski ažuriran.* Lice je odmah spremno za prepoznavanje na kamerama i pri pretrazi!"
                 )
@@ -1341,6 +1323,8 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
         return
 
+    context.user_data.pop("awaiting_person_search", None)
+
     photos = update.message.photo
     doc = update.message.document
     if not photos and not doc:
@@ -1389,9 +1373,10 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                         role = f.get("role", "standard")
                         used_thresh = round(float(f.get("threshold", 0.45)) * 100, 1)
                         raw_age = f.get("age")
-                        age_str = f"~{raw_age} god" if (raw_age is not None and str(raw_age).lower() != "none") else "N/A"
-                        gender_str = f.get("gender") or "N/A"
-                        bio_desc = f"{age_str}, {gender_str}" if (age_str != "N/A" or gender_str != "N/A") else "N/A"
+                        age_str = f"~{raw_age} god" if (raw_age is not None and str(raw_age).lower() != "none") else ""
+                        gender_str = f.get("gender") or ""
+                        bio_parts = [p for p in [age_str, gender_str] if p]
+                        bio_line = f"📐 Dob/Spol: `{', '.join(bio_parts)}`\n" if bio_parts else ""
                         is_real = f.get("is_real", True)
                         live_conf = round(float(f.get("liveness_conf", 1.0)) * 100, 1)
 
@@ -1408,7 +1393,7 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                                 f"👤 **Lice #{idx+1}: {name}**\n"
                                 f"🏷️ Status: {role_badge}\n"
                                 f"📈 Podudaranje: {sim_bar} (Prag: `{used_thresh}%`, Uzoraka: {f.get('sample_count', 1)})\n"
-                                f"📐 Dob/Spol: `{bio_desc}`\n"
+                                f"{bio_line}"
                                 f"🛡️ Liveness provjera: `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({live_conf}%)`"
                             )
                         elif status == "Moguće poklapanje" and name and name not in ("Nepoznat", "Nepoznato", "Baza je prazna"):
@@ -1416,14 +1401,14 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
                                 f"👤 **Lice #{idx+1}: {name}? (Moguće poklapanje)**\n"
                                 f"⚠️ Sličnost: {sim_bar} (Ispod sigurnosnog praga od `{used_thresh}%`)\n"
                                 f"🏷️ Status u bazi: {role_badge}\n"
-                                f"📐 Dob/Spol: `{bio_desc}`\n"
+                                f"{bio_line}"
                                 f"🛡️ Liveness provjera: `{'Autentično lice' if is_real else '⚠️ Mogući ekran/slika'} ({live_conf}%)`"
                             )
                         else:
                             item_txt = (
                                 f"👤 **Lice #{idx+1}: Nepoznata osoba**\n"
-                                f"❌ Nema poklapanja: {sim_bar} (Sigurnosni prag: `{used_thresh}%`)\n"
-                                f"📐 Dob/Spol: `{bio_desc}`"
+                                f"❌ Nema poklapanja: {sim_bar} (Sigurnosni prag: `{used_thresh}%`)"
+                                + (f"\n{bio_line.rstrip()}" if bio_line else "")
                             )
                         items.append(item_txt)
 
@@ -1514,22 +1499,19 @@ async def handle_direct_photo_search(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(out_msg, reply_markup=search_nav_markup, parse_mode=None)
 
 async def search_button_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Responds when user clicks the '🔍 Provjeri u bazi' button."""
+    """Responds when user clicks the '🔍 Provjeri u bazi' button or /scan."""
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id):
-        return
+        return ConversationHandler.END
 
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
-
+    context.user_data.clear()
     await update.message.reply_text(
         "📸 **Pretraga u bazi lica:**\n\n"
         "Pošaljite fotografiju lica koje želite provjeriti u bazi podataka ArgusFace sustava.",
         reply_markup=get_back_to_main_menu(),
         parse_mode=constants.ParseMode.MARKDOWN
     )
+    return ConversationHandler.END
 
 # ----------------- Person Search (Text / Name query) -----------------
 
@@ -1657,13 +1639,9 @@ async def search_persons_command(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id):
         await send_unauthorized_message(update, context)
-        return
+        return ConversationHandler.END
 
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
-
+    context.user_data.clear()
     args = context.args or []
     query = " ".join(args).strip()
 
@@ -1676,20 +1654,18 @@ async def search_persons_command(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=CANCEL_MARKUP,
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     await perform_person_search(update, context, query)
+    return ConversationHandler.END
 
 async def search_persons_button_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles click on the 🗂️ Baza registriranih osoba button."""
     chat_id = update.effective_chat.id
     if not is_authorized(chat_id):
-        return
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
+        return ConversationHandler.END
 
+    context.user_data.clear()
     context.user_data["awaiting_person_search"] = True
     await update.message.reply_text(
         "🗂️ **Pretraga baze registriranih osoba**\n\n"
@@ -1697,13 +1673,14 @@ async def search_persons_button_prompt(update: Update, context: ContextTypes.DEF
         reply_markup=CANCEL_MARKUP,
         parse_mode=constants.ParseMode.MARKDOWN
     )
+    return ConversationHandler.END
 
 # =========================================================================
-# GENERAL TEXT / PIN HANDLER
+# GENERAL TEXT HANDLER
 # =========================================================================
 
 async def handle_general_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles PIN entry, lock requests, and general navigation."""
+    """Handles person search queries and general navigation."""
     chat_id = update.effective_chat.id
     user = update.effective_user
 
@@ -1729,101 +1706,7 @@ async def handle_general_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         await admin_list_users(update, context)
         return
 
-    # 1. Handle explicit lock request
-    if text in ["🔒 Zaključaj", "/lock"]:
-        await lock_command(update, context)
-        return
-
-    # 2. Check if user is entering the PIN
-    cfg = get_remote_bot_config()
-    current_pin = cfg.get("pin", "")
-
-    if current_pin and text == current_pin:
-        # Check if currently blocked
-        if chat_id in failed_attempts:
-            blocked_until = failed_attempts[chat_id].get("blocked_until", 0)
-            if time.time() < blocked_until:
-                remaining = int(blocked_until - time.time())
-                await update.message.reply_text(
-                    f"⏳ **Privremena blokada:** Previše pokušaja. Pričekajte još `{remaining} sekundi`.",
-                    parse_mode=constants.ParseMode.MARKDOWN
-                )
-                return
-
-        # Auto-promote first authenticated user to Admin if no admin exists
-        admin_ids = cfg.get("admin_chat_ids", [])
-        if not admin_ids:
-            try:
-                admin_name = f"{user.first_name} {user.last_name or ''}".strip() or "Administrator"
-                requests.post(
-                    f"{ARGUSFACE_API_URL}/api/v1/bot/users/add",
-                    data={"chat_id": chat_id, "name": admin_name, "role": "admin"},
-                    headers=get_api_headers(),
-                    timeout=5
-                )
-                get_remote_bot_config(force=True)
-            except Exception as e:
-                logger.warning(f"Neuspjelo automatsko postavljanje administratora: {e}")
-
-        # Success - unlock session!
-        authenticated_sessions[chat_id] = time.time()
-        failed_attempts.pop(chat_id, None)
-
-        role_info = " (👑 Administrator)" if is_admin(chat_id) else ""
-        await update.message.reply_text(
-            f"🔓 **PIN prihvaćen — Sustav otključan!**\n\n"
-            f"Dobrodošli u ArgusFace biometrijski centar{role_info}. Odaberite željenu opciju:",
-            reply_markup=get_main_menu(chat_id),
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
-        user = update.effective_user
-        welcome_text = format_welcome_text(user.first_name, chat_id)
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=get_main_inline_menu(chat_id),
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
-        return
-
-    # 3. If not already authenticated, check if this was a wrong PIN attempt
-    is_auth, lock_msg = check_authentication(chat_id)
-    if not is_auth:
-        if current_pin:
-            # Check if user is already blocked
-            if chat_id in failed_attempts and time.time() < failed_attempts[chat_id].get("blocked_until", 0):
-                remaining = int(failed_attempts[chat_id]["blocked_until"] - time.time())
-                await update.message.reply_text(
-                    f"⏳ **Privremena blokada:** Pričekajte još `{remaining} sekundi`.",
-                    parse_mode=constants.ParseMode.MARKDOWN
-                )
-                return
-
-            fa = failed_attempts.setdefault(chat_id, {"count": 0, "blocked_until": 0})
-            fa["count"] += 1
-
-            if fa["count"] >= 5:
-                fa["blocked_until"] = time.time() + 300  # 5 min lockout
-                await update.message.reply_text(
-                    "🚨 **Previše netočnih unosa PIN-a!**\n"
-                    "Bot je privremeno blokiran na 5 minuta.",
-                    reply_markup=ReplyKeyboardRemove(),
-                    parse_mode=constants.ParseMode.MARKDOWN
-                )
-                return
-
-            await update.message.reply_text(
-                f"❌ **Netočan PIN!** (Pokušaj {fa['count']}/5)\n\n"
-                "Molimo unesite ispravan sigurnosni PIN za pristup sustavu:",
-                reply_markup=ReplyKeyboardRemove(),
-                parse_mode=constants.ParseMode.MARKDOWN
-            )
-            return
-
-        await update.message.reply_text(lock_msg, reply_markup=ReplyKeyboardRemove(), parse_mode=constants.ParseMode.MARKDOWN)
-        return
-
-    # 4. If authenticated and text is back button or general message
-    user = update.effective_user
+    # General message or back button -> show main inline menu
     welcome_text = format_welcome_text(user.first_name, chat_id)
     await update.message.reply_text(
         welcome_text,
@@ -1836,12 +1719,16 @@ async def handle_general_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 # =========================================================================
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles inline button clicks for requesting and granting bot access."""
+    """Handles inline button clicks for requesting and granting bot access and card navigation."""
     query = update.callback_query
     await query.answer()
     data = query.data or ""
     chat_id = update.effective_chat.id
     user = update.effective_user
+
+    # Clear any active conversation state when navigating via inline buttons
+    if data.startswith("nav_") or data.startswith("admin_"):
+        context.user_data.clear()
 
     # 1. Unauthorized user clicks "📩 Zatraži pristup od administratora"
     if data.startswith("req_access:"):
@@ -1858,7 +1745,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 "Molimo obratite se izravno vlasniku računala.",
                 parse_mode=constants.ParseMode.MARKDOWN
             )
-            return
+            return ConversationHandler.END
 
         name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "Korisnik"
         uname = f"@{user.username}" if user.username else ""
@@ -1903,16 +1790,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             f"⏳ **Vaš zahtjev je uspješno poslan administratoru!**\n\n"
             f"🆔 Vaš Chat ID: `{req_chat_id}`\n\n"
             f"Čim administrator odobri vaš pristup na svom Telegramu, "
-            f"primit ćete obavijest i moći ćete otključati sustav.",
+            f"primit ćete obavijest i moći ćete koristiti sustav.",
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     # 2. Administrator clicks "✅ Odobri pristup"
     if data.startswith("approve_user:"):
         if not is_admin(chat_id):
             await safe_edit_or_reply(query, "⛔ Nemate administratorska prava za odobravanje pristupa.")
-            return
+            return ConversationHandler.END
 
         target_id = int(data.split(":")[1])
         req_info = pending_access_requests.get(target_id, {})
@@ -1946,7 +1833,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         chat_id=target_id,
                         text=(
                             "🎉 **Čestitamo! Administrator vam je odobrio pristup ArgusFace biometrijskom sustavu.**\n\n"
-                            "Pošaljite **/start** ili unesite **sigurnosni PIN** za početak rada."
+                            "Pošaljite **/start** za početak rada."
                         ),
                         parse_mode=constants.ParseMode.MARKDOWN
                     )
@@ -1956,13 +1843,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await safe_edit_or_reply(query, f"⚠️ Greška API-ja pri odobrenju: HTTP {resp.status_code}")
         except Exception as e:
             await safe_edit_or_reply(query, f"❌ Greška pri odobrenju: {e}")
-        return
+        return ConversationHandler.END
 
     # 3. Administrator clicks "❌ Odbij"
     if data.startswith("reject_user:"):
         if not is_admin(chat_id):
             await safe_edit_or_reply(query, "⛔ Nemate administratorska prava za ovu akciju.")
-            return
+            return ConversationHandler.END
 
         target_id = int(data.split(":")[1])
         req_info = pending_access_requests.get(target_id, {})
@@ -1984,7 +1871,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
         except Exception:
             pass
-        return
+        return ConversationHandler.END
+
+    # Block unauthorized users from any further navigation or actions
+    if not is_authorized(chat_id):
+        await send_unauthorized_message(update, context)
+        return ConversationHandler.END
 
     # 4. Interactive Card UI Navigation (Option 2)
     if data == "nav_main_menu":
@@ -1995,7 +1887,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_main_inline_menu(chat_id),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     if data in ("nav_status", "nav_status_refresh"):
         url = f"{ARGUSFACE_API_URL}/api/v1/status"
@@ -2013,8 +1905,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     f"📸 **Spremljenih uzoraka:** `{s_data.get('total_samples', 0)}`\n"
                     f"⚡ **Vektorski indeks:** `{s_data.get('index_backend', 'N/A')}` ({faiss_txt})\n"
                     f"🛡️ **Anti-Spoofing (Liveness):** {spoof_txt}\n"
-                    f"🔐 **PIN Zaštita bota:** `🟢 Aktivna`\n"
-                    f"⏱️ **Istek sesije:** `{cfg.get('session_timeout_minutes', 30)} min`\n"
                     f"👥 **Ovlaštenih korisnika:** `{len(cfg.get('allowed_users', []))}`\n"
                     f"🌐 **Poveznica:** `{ARGUSFACE_API_URL}`\n\n"
                     f"🕒 Ažurirano: `{time.strftime('%H:%M:%S')}`"
@@ -2030,11 +1920,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_status_inline_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     if data == "nav_webapp":
         await webapp_command(update, context)
-        return
+        return ConversationHandler.END
 
     if data == "nav_search":
         await safe_edit_or_reply(
@@ -2048,16 +1938,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_back_to_main_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
-
-    if data == "nav_lock":
-        authenticated_sessions.pop(chat_id, None)
-        await safe_edit_or_reply(
-            query,
-            "🔒 **Sustav je uspješno zaključan.**\n\nZa ponovni pristup unesite svoj **sigurnosni PIN**:",
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
-        return
+        return ConversationHandler.END
 
     if data == "nav_help":
         help_text = (
@@ -2065,8 +1946,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             "• **Skeniranje lica:** Bilo kada pošaljite fotografiju s mobitela u chat.\n"
             "• **Usporedba 2 lica:** Naredba /compare ili gumb u izborniku.\n"
             "• **Registracija osobe:** Naredba /enroll ili gumb u izborniku.\n"
-            "• **Status sustava:** Provjera stanja AI enginea i baze podataka.\n"
-            "• **Zaključavanje:** /lock odmah zaključava sesiju radi sigurnosti.\n\n"
+            "• **Status sustava:** Provjera stanja AI enginea i baze podataka.\n\n"
             "💡 Za izbornik uvijek možete upisati **/menu** ili **/start**."
         )
         await safe_edit_or_reply(
@@ -2075,20 +1955,20 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_back_to_main_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     if data == "nav_admin":
         if not is_admin(chat_id):
             await safe_edit_or_reply(query, "⛔ Nemate administratorska prava.", reply_markup=get_back_to_main_menu())
-            return
+            return ConversationHandler.END
         await safe_edit_or_reply(
             query,
             "⚙️ **ADMINISTRATORSKI PANEL**\n\n"
-            "Odaberite akciju za upravljanje ovlaštenim korisnicima i sigurnosnim postavkama:",
+            "Odaberite akciju za upravljanje ovlaštenim korisnicima:",
             reply_markup=get_admin_inline_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     if data in ("nav_search_persons", "admin_search_persons"):
         context.user_data["awaiting_person_search"] = True
@@ -2100,12 +1980,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_back_to_main_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     if data == "admin_list_users":
         if not is_admin(chat_id):
             await safe_edit_or_reply(query, "⛔ Nemate administratorska prava.", reply_markup=get_back_to_main_menu())
-            return
+            return ConversationHandler.END
         cfg = get_remote_bot_config(force=True)
         users = cfg.get("allowed_users", [])
         if not users:
@@ -2124,29 +2004,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_back_to_admin_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
-
-    if data == "admin_pin_info":
-        if not is_admin(chat_id):
-            await safe_edit_or_reply(query, "⛔ Nemate administratorska prava.", reply_markup=get_back_to_main_menu())
-            return
-        cfg = get_remote_bot_config(force=True)
-        pin = cfg.get("pin", "121977")
-        timeout = cfg.get("session_timeout_minutes", 30)
-        txt = (
-            "🔑 **SIGURNOSNI PIN I SESIJE**\n\n"
-            f"• **Trenutni PIN:** `{pin}`\n"
-            f"• **Timeout neaktivnosti:** `{timeout} min`\n"
-            f"• **Anti-bruteforce zaštita:** `3 pokušaja -> 60s blokada`\n\n"
-            "Za promjenu PIN-a, koristite donji izbornik **'⚙️ Admin panel' -> '🔑 Promijeni PIN'**."
-        )
-        await safe_edit_or_reply(
-            query,
-            txt,
-            reply_markup=get_back_to_admin_menu(),
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
-        return
+        return ConversationHandler.END
 
     if data == "admin_add_info":
         await safe_edit_or_reply(
@@ -2157,7 +2015,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_back_to_admin_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
 
     if data == "admin_del_info":
         await safe_edit_or_reply(
@@ -2167,7 +2025,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_back_to_admin_menu(),
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        return
+        return ConversationHandler.END
+
+    return ConversationHandler.END
 
 async def setup_bot_commands(application):
     """Registers the persistent Telegram bot menu button commands."""
@@ -2179,7 +2039,6 @@ async def setup_bot_commands(application):
         BotCommand("database", "🗂️ Baza registriranih osoba"),
         BotCommand("status", "📊 Status i performanse sustava"),
         BotCommand("webapp", "📱 Otvori Mini Web App"),
-        BotCommand("lock", "🔒 Zaključaj sesiju (PIN)"),
     ]
     try:
         await application.bot.set_my_commands(commands)
@@ -2203,11 +2062,22 @@ def main():
     print(f"[*] Spajam se na ArgusFace API: {ARGUSFACE_API_URL}")
 
     cfg = get_remote_bot_config()
-    print(f"[*] Sigurnosni PIN: {cfg.get('pin', 'N/A')}")
     print(f"[*] Ovlaštenih korisnika: {len(cfg.get('allowed_users', []))}")
     print(f"[*] Administratora: {len(cfg.get('admin_chat_ids', []))}")
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(setup_bot_commands).build()
+
+    # Common fallbacks so users can exit any conversation via inline buttons or slash commands
+    nav_fallbacks = [
+        CallbackQueryHandler(handle_callback_query, pattern="^nav_(main_menu|status|status_refresh|webapp|search|help|admin|search_persons)$"),
+        CommandHandler("menu", menu_command),
+        CommandHandler("start", start_command),
+        CommandHandler("scan", search_button_prompt),
+        CommandHandler("status", status_command),
+        CommandHandler("help", help_command),
+        CommandHandler("webapp", webapp_command),
+        CommandHandler(["trazi", "osobe", "search", "database", "baza"], search_persons_command),
+    ]
 
     # Compare conversation handler (1:1)
     compare_conv_handler = ConversationHandler(
@@ -2229,7 +2099,9 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", compare_cancel),
-            MessageHandler(filters.Regex("^❌ Odustani$"), compare_cancel)
+            MessageHandler(filters.Regex("^❌ Odustani$"), compare_cancel),
+            MessageHandler(filters.Regex("^🔙 (Povratak u glavni meni|Glavni izbornik)$"), compare_cancel),
+            *nav_fallbacks
         ]
     )
 
@@ -2244,20 +2116,20 @@ def main():
         ],
         states={
             ENROLL_NAME: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_name),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), enroll_name),
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
             ],
             ENROLL_ROLE: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_role),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), enroll_role),
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
             ],
             ENROLL_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_notes),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), enroll_notes),
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
             ],
             ENROLL_PHOTOS: [
                 MessageHandler(filters.PHOTO, enroll_photo_received),
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), enroll_photo_text_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), enroll_photo_text_handler),
                 MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel)
             ]
         },
@@ -2265,8 +2137,7 @@ def main():
             CommandHandler("cancel", enroll_cancel),
             MessageHandler(filters.Regex("^❌ Odustani$"), enroll_cancel),
             MessageHandler(filters.Regex("^🔙 (Povratak u glavni meni|Glavni izbornik)$"), enroll_cancel),
-            CommandHandler("menu", enroll_cancel),
-            CommandHandler("start", enroll_cancel)
+            *nav_fallbacks
         ]
     )
 
@@ -2277,21 +2148,22 @@ def main():
         ],
         states={
             ADMIN_ADD_ID: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), admin_add_user_id),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), admin_add_user_id),
                 MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
             ],
             ADMIN_ADD_NAME: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), admin_add_user_name),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), admin_add_user_name),
                 MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
             ],
             ADMIN_ADD_ROLE: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), admin_add_user_role),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), admin_add_user_role),
                 MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
             ]
         },
         fallbacks=[
             CommandHandler("cancel", admin_cancel),
-            MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
+            MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel),
+            *nav_fallbacks
         ]
     )
 
@@ -2302,30 +2174,14 @@ def main():
         ],
         states={
             ADMIN_REMOVE_ID: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), admin_remove_user_finish),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Odustani$"), admin_remove_user_finish),
                 MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
             ]
         },
         fallbacks=[
             CommandHandler("cancel", admin_cancel),
-            MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
-        ]
-    )
-
-    # Admin: Change PIN conversation
-    admin_change_pin_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^🔑 Promijeni PIN$"), admin_change_pin_start)
-        ],
-        states={
-            ADMIN_PIN_NEW: [
-                MessageHandler(filters.TEXT & ~filters.Regex("^❌ Odustani$"), admin_change_pin_finish),
-                MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
-            ]
-        },
-        fallbacks=[
-            CommandHandler("cancel", admin_cancel),
-            MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel)
+            MessageHandler(filters.Regex("^❌ Odustani$"), admin_cancel),
+            *nav_fallbacks
         ]
     )
 
@@ -2334,7 +2190,6 @@ def main():
     app.add_handler(enroll_conv_handler)
     app.add_handler(admin_add_user_conv)
     app.add_handler(admin_remove_user_conv)
-    app.add_handler(admin_change_pin_conv)
 
     # Interactive inline button callback query handler (Request access & 1-tap approval)
     app.add_handler(CallbackQueryHandler(handle_callback_query))
@@ -2347,7 +2202,6 @@ def main():
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("app", webapp_command))
     app.add_handler(CommandHandler("webapp", webapp_command))
-    app.add_handler(CommandHandler("lock", lock_command))
     app.add_handler(CommandHandler("admin", admin_panel_open))
 
     app.add_handler(CommandHandler(["trazi", "osobe", "search", "database", "baza"], search_persons_command))
@@ -2358,7 +2212,6 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^ℹ️ Pomoć$"), help_command))
     app.add_handler(MessageHandler(filters.Regex("^🔍 Provjeri u bazi$"), search_button_prompt))
     app.add_handler(MessageHandler(filters.Regex("^🗂️ Baza registriranih osoba$"), search_persons_button_prompt))
-    app.add_handler(MessageHandler(filters.Regex("^🔒 Zaključaj$"), lock_command))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Admin panel$"), admin_panel_open))
     app.add_handler(MessageHandler(filters.Regex("^👥 Popis (bot )?korisnika$"), admin_list_users))
     app.add_handler(MessageHandler(filters.Regex("^🔙 Povratak u glavni meni$"), admin_back_to_main))
@@ -2366,7 +2219,7 @@ def main():
     # Direct photo upload (1:N search) - supports standard compressed photos and uncompressed documents
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_direct_photo_search))
 
-    # General text messages (PIN input, navigation, etc.)
+    # General text messages (person search, navigation, etc.)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_general_text))
 
     print("[*] Telegram Bot je uspješno pokrenut i sluša poruke...")

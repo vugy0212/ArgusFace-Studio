@@ -14,13 +14,20 @@ from datetime import datetime
 import cv2
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from PIL import Image, ImageOps
+
+# Ensure project root and src are on sys.path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(CURRENT_DIR)
+for p in [CURRENT_DIR, PARENT_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 # Ensure safe stream fallback when running under pythonw.exe without a console window
 class _NullWriter:
@@ -30,19 +37,33 @@ class _NullWriter:
         pass
     def isatty(self):
         return False
-    def fileno(self):
-        raise OSError(9, "Bad file descriptor")
+
+# If running without attached console (e.g. pythonw.exe or WScript background),
+# redirect output to data/api_server.log so service never dies and logs are preserved.
+_api_log_file = None
+if getattr(sys, "stdout", None) is None or getattr(sys, "stderr", None) is None:
+    try:
+        _log_dir = os.path.join(PARENT_DIR, "data")
+        os.makedirs(_log_dir, exist_ok=True)
+        _api_log_file = open(os.path.join(_log_dir, "api_server.log"), "a", encoding="utf-8", buffering=1)
+    except Exception:
+        _api_log_file = None
 
 if getattr(sys, "stdout", None) is None:
-    sys.stdout = _NullWriter()
-if getattr(sys, "stderr", None) is None:
-    sys.stderr = _NullWriter()
+    sys.stdout = _api_log_file if _api_log_file is not None else _NullWriter()
+elif hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
-# Ensure project root and src are on sys.path
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PARENT_DIR = os.path.dirname(CURRENT_DIR)
-for p in [CURRENT_DIR, PARENT_DIR]:
-    if p not in sys.path:
+if getattr(sys, "stderr", None) is None:
+    sys.stderr = _api_log_file if _api_log_file is not None else _NullWriter()
+elif hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
         sys.path.insert(0, p)
 
 try:
@@ -78,6 +99,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Prevent caching of webapp static files in Telegram WebView and mobile browsers
+@app.middleware("http")
+async def add_no_cache_headers_for_webapp(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/webapp") or request.url.path == "/app":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["Permissions-Policy"] = "camera=(self)"
+    return response
 
 # Mount Mini Web App (Single Screen Mobile UI)
 app.mount("/webapp", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
@@ -461,6 +493,9 @@ async def search_database(
             "message": "Na fotografiji nije detektirano niti jedno lice."
         }
 
+    # Sort faces left-to-right so text index (#1, #2...) matches annotated image labels [#1], [#2]...
+    faces.sort(key=lambda f: f["bbox"][0])
+
     face_index = face_engine.get_face_index()
     results = []
 
@@ -544,10 +579,18 @@ async def search_database(
     except Exception:
         annotated_b64 = None
 
-    # If top face is matched, generate side-by-side biometric verification card
-    if results and results[0].get("matched") and results[0].get("person_id"):
+    matches = [r for r in results if r.get("matched")]
+
+    # If a single face is detected and matched (or best matched face), generate side-by-side biometric verification card
+    # For multi-face group photos, prefer annotated_b64 as primary visual unless only 1 face is in the photo
+    matched_with_id = sorted(
+        [r for r in results if r.get("matched") and r.get("person_id")],
+        key=lambda r: r.get("similarity", 0.0),
+        reverse=True
+    )
+    if matched_with_id and len(faces) == 1:
         try:
-            top_res = results[0]
+            top_res = matched_with_id[0]
             pid = top_res["person_id"]
             pname = top_res["person_name"]
             prole = top_res["role"]
@@ -577,8 +620,6 @@ async def search_database(
                         verification_card_b64 = base64.b64encode(buf_card).decode("utf-8")
         except Exception:
             verification_card_b64 = None
-
-    matches = [r for r in results if r.get("matched")]
 
     return {
         "success": True,
@@ -683,6 +724,14 @@ async def enroll_person(
             "success": False,
             "error": "Na poslanim slikama nije uspješno detektirano niti jedno lice: " + "; ".join(failed_reasons)
         }
+
+    # Immediately rebuild the active FaceIndex so newly enrolled samples are searchable right away
+    try:
+        db.invalidate_cache()
+        face_engine.invalidate_face_index()
+        face_engine.get_face_index(force_refresh=True)
+    except Exception:
+        pass
 
     all_samples = db.get_person_samples(person_id)
 
@@ -820,6 +869,65 @@ def get_person_details(person_id: int, _: bool = Depends(verify_api_key)):
         }
     }
 
+class PersonUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    notes: Optional[str] = None
+
+@app.put("/api/v1/persons/{person_id}")
+@app.post("/api/v1/persons/{person_id}/update")
+async def update_person_endpoint(
+    person_id: int,
+    request: Request,
+    _: bool = Depends(verify_api_key)
+):
+    """Ažurira ime, ulogu ili bilješke registrirane osobe (podržava JSON i Form podatke)."""
+    p = db.get_person(person_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Osoba nije pronađena.")
+
+    content_type = request.headers.get("content-type", "").lower()
+    data = {}
+    if "application/json" in content_type:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+    else:
+        try:
+            form = await request.form()
+            data = dict(form)
+        except Exception:
+            data = {}
+
+    new_name = data.get("name")
+    new_role = data.get("role")
+    new_notes = data.get("notes")
+
+    final_name = str(new_name).strip() if (new_name is not None and str(new_name).strip()) else p["name"]
+    final_role = str(new_role or p.get("role") or "standard").strip().lower()
+    final_notes = str(new_notes).strip() if new_notes is not None else (p.get("notes") or "")
+
+    if not final_name:
+        raise HTTPException(status_code=400, detail="Ime osobe ne smije biti prazno.")
+
+    try:
+        db.update_person(person_id, final_name, final_notes, role=final_role)
+        db.invalidate_cache()
+        face_engine.invalidate_face_index()
+        face_engine.get_face_index(force_refresh=True)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Greška pri ažuriranju: {e}")
+
+    updated = db.get_person(person_id)
+    return {
+        "success": True,
+        "message": f"Podaci za osobu '{final_name}' su uspješno ažurirani.",
+        "person": updated
+    }
+
 @app.delete("/api/v1/persons/{person_id}")
 def delete_person_endpoint(person_id: int, _: bool = Depends(verify_api_key)):
     """Briše osobu i sve njezine uzorke iz baze podataka."""
@@ -832,9 +940,9 @@ def delete_person_endpoint(person_id: int, _: bool = Depends(verify_api_key)):
 
     # Force rebuild of face search index so deleted person is immediately purged from search
     try:
-        idx = face_engine.get_face_index()
-        if hasattr(idx, "rebuild"):
-            idx.rebuild()
+        db.invalidate_cache()
+        face_engine.invalidate_face_index()
+        face_engine.get_face_index(force_refresh=True)
     except Exception:
         pass
 

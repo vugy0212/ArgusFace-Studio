@@ -8,9 +8,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- No-cache meta headers for Telegram WebView & mobile browsers -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <!-- Telegram Web App SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="style.css?v=1.2">
+    <link rel="stylesheet" href="style.css?v=3.7">
 </head>
 <body class="dark-theme">
     <div id="app" class="app-container">
@@ -54,18 +58,25 @@
                 <div class="photo-scan-card">
                     <!-- Drop / Select Zone -->
                     <div class="photo-upload-zone" id="scanUploadZone">
-                        <input type="file" id="fileInputScan" accept="image/*" style="display: none;">
+                        <input type="file" id="fileInputScanCamera" accept="image/*" capture="environment" class="visually-hidden">
+                        <input type="file" id="fileInputScanGallery" accept="image/*" class="visually-hidden">
+                        <input type="file" id="fileInputScan" accept="image/*" class="visually-hidden">
                         
                         <div class="upload-placeholder" id="scanPlaceholder">
-                            <div class="upload-icon-pulse">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                                    <circle cx="12" cy="13" r="4"/>
-                                </svg>
+                            <div class="upload-trigger-area" onclick="openLiveCamera('scan')">
+                                <div class="upload-icon-pulse">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                        <circle cx="12" cy="13" r="4"/>
+                                    </svg>
+                                </div>
+                                <h3>Dodirnite za odabir fotografije</h3>
+                                <p>Uslikajte kamerom mobitela ili odaberite sliku iz galerije za provjeru u bazi</p>
                             </div>
-                            <h3>Dodirnite za odabir fotografije</h3>
-                            <p>Uslikajte kamerom mobitela ili odaberite sliku iz galerije za provjeru u bazi</p>
-                            <span class="upload-chip">📸 Snimi / Odaberi sliku</span>
+                            <div class="upload-chips-row">
+                                <button type="button" class="upload-chip chip-camera" id="btnScanCamera" onclick="openLiveCamera('scan')">📸 Uslikaj kamerom</button>
+                                <label for="fileInputScanGallery" class="upload-chip chip-gallery" id="btnScanGallery">📁 Iz galerije</label>
+                            </div>
                         </div>
 
                         <!-- Active Image Preview -->
@@ -118,10 +129,12 @@
                             <span>Fotografija 1</span>
                         </div>
                         <img id="imgSlot1" style="display: none;" alt="Slika 1">
-                        <div class="slot-actions">
-                            <button class="slot-btn" onclick="triggerCompareInput(1)">Odaberi sliku 1</button>
+                        <div class="slot-actions compare-split-actions">
+                            <button type="button" class="slot-btn slot-cam-btn" onclick="openLiveCamera('compare1')">📸 Uslikaj</button>
+                            <label for="fileSlot1" class="slot-btn slot-gal-btn">📁 Galerija</label>
                         </div>
-                        <input type="file" id="fileSlot1" accept="image/*" style="display: none;">
+                        <input type="file" id="fileSlot1Camera" accept="image/*" capture="environment" class="visually-hidden">
+                        <input type="file" id="fileSlot1" accept="image/*" class="visually-hidden">
                     </div>
 
                     <!-- Photo 2 Slot -->
@@ -134,10 +147,12 @@
                             <span>Fotografija 2</span>
                         </div>
                         <img id="imgSlot2" style="display: none;" alt="Slika 2">
-                        <div class="slot-actions">
-                            <button class="slot-btn" onclick="triggerCompareInput(2)">Odaberi sliku 2</button>
+                        <div class="slot-actions compare-split-actions">
+                            <button type="button" class="slot-btn slot-cam-btn" onclick="openLiveCamera('compare2')">📸 Uslikaj</button>
+                            <label for="fileSlot2" class="slot-btn slot-gal-btn">📁 Galerija</label>
                         </div>
-                        <input type="file" id="fileSlot2" accept="image/*" style="display: none;">
+                        <input type="file" id="fileSlot2Camera" accept="image/*" capture="environment" class="visually-hidden">
+                        <input type="file" id="fileSlot2" accept="image/*" class="visually-hidden">
                     </div>
                 </div>
 
@@ -178,15 +193,23 @@
                     <!-- Photo selection / capture -->
                     <div class="enroll-photo-picker" id="enrollPhotoPicker">
                         <div class="picker-placeholder" id="enrollPlaceholder">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                <circle cx="12" cy="12" r="10"/>
-                                <path d="M12 8v8"/>
-                                <path d="M8 12h8"/>
-                            </svg>
-                            <span>Dodirnite za odabir fotografije</span>
+                            <label for="fileEnrollCamera" class="enroll-main-trigger">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <path d="M12 8v8"/>
+                                    <path d="M8 12h8"/>
+                                </svg>
+                                <span>Dodirnite za odabir fotografije</span>
+                            </label>
+                            <div class="upload-chips-row mini-chips">
+                                <button type="button" class="upload-chip chip-camera" id="btnEnrollCamera" onclick="openLiveCamera('enroll')">📸 Uslikaj</button>
+                                <label for="fileEnrollGallery" class="upload-chip chip-gallery" id="btnEnrollGallery">📁 Galerija</label>
+                            </div>
                         </div>
                         <img id="enrollPreviewImg" style="display: none;" alt="Novo lice">
-                        <input type="file" id="fileEnroll" accept="image/*" style="display: none;">
+                        <input type="file" id="fileEnrollCamera" accept="image/*" capture="environment" class="visually-hidden">
+                        <input type="file" id="fileEnrollGallery" accept="image/*" class="visually-hidden">
+                        <input type="file" id="fileEnroll" accept="image/*" class="visually-hidden">
                     </div>
 
                     <!-- Input Fields -->
@@ -411,11 +434,145 @@
                 </div>
             </div>
         </div>
-
-        <!-- Toast Notification -->
-        <div id="toastNotification" class="toast" style="display: none;"></div>
     </div>
 
-    <script src="app.js?v=1.2"></script>
+    <!-- Person Details & Edit Modal (Skočni prozor za pregled i izmjenu podataka) -->
+    <div id="personDetailModal" class="person-modal-backdrop">
+        <div class="person-modal-card" role="dialog" aria-modal="true" aria-labelledby="modalPersonTitle">
+            <!-- Mobile drag pill -->
+            <div class="modal-drag-indicator"></div>
+
+            <!-- Modal Header -->
+            <div class="person-modal-header">
+                <div class="modal-header-title">
+                    <span class="modal-header-icon">👤</span>
+                    <div>
+                        <h2 id="modalPersonTitle">Podaci o osobi</h2>
+                        <span class="modal-subtitle" id="modalPersonSubtitle">ID #-- • Registrirana osoba</span>
+                    </div>
+                </div>
+                <button type="button" class="modal-close-btn" id="btnClosePersonModal" title="Zatvori">✕</button>
+            </div>
+
+            <!-- Modal Body (Scrollable) -->
+            <div class="person-modal-body">
+                <!-- Person Avatar & Samples Gallery -->
+                <div class="modal-avatar-section">
+                    <div class="modal-avatar-preview" id="modalAvatarPreview">
+                        <span class="avatar-placeholder">👤</span>
+                    </div>
+                    <div class="modal-avatar-meta">
+                        <span class="modal-person-badge standard" id="modalRoleBadge">STANDARD</span>
+                        <span class="modal-meta-text" id="modalSampleCountTxt">📸 1 uzorak lica</span>
+                        <span class="modal-meta-text" id="modalCreatedAtTxt">📅 Dodano: --</span>
+                    </div>
+                </div>
+
+                <!-- Stored Samples Strip (Crops) -->
+                <div class="modal-samples-strip" id="modalSamplesStrip" style="display: none;">
+                    <!-- Rendered dynamically -->
+                </div>
+
+                <!-- Edit Form -->
+                <form id="formEditPerson" onsubmit="event.preventDefault(); savePersonChanges();">
+                    <input type="hidden" id="editPersonId">
+
+                    <div class="form-group">
+                        <label for="editPersonName">Ime i prezime *</label>
+                        <input type="text" id="editPersonName" class="form-input" placeholder="Ime i prezime osobe" required autocomplete="off">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Sigurnosna Uloga / Status</label>
+                        <div class="role-selector" id="editRoleSelector">
+                            <button type="button" class="role-btn active" data-role="standard">
+                                <span class="role-dot standard"></span> Standard
+                            </button>
+                            <button type="button" class="role-btn" data-role="vip">
+                                <span class="role-dot vip"></span> VIP
+                            </button>
+                            <button type="button" class="role-btn" data-role="blacklist">
+                                <span class="role-dot blacklist"></span> Crna lista
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="editPersonNotes">Bilješke ili odjel</label>
+                        <textarea id="editPersonNotes" class="form-input textarea-input" rows="2" placeholder="npr. Odjel prodaje, VIP posjetitelj, razlog zabrane..."></textarea>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Modal Footer Actions -->
+            <div class="person-modal-footer">
+                <button type="button" class="primary-btn save-btn" id="btnSavePersonModal" onclick="savePersonChanges()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                        <polyline points="17 21 17 13 7 13 7 21"/>
+                        <polyline points="7 3 7 8 15 8"/>
+                    </svg>
+                    <span>SPREMI IZMJENE</span>
+                </button>
+
+                <div class="modal-secondary-actions">
+                    <button type="button" class="modal-sec-btn add-photo" id="btnAddPhotoFromModal" onclick="addPhotoToCurrentPerson()">
+                        📸 Dodaj novu sliku
+                    </button>
+                    <button type="button" class="modal-sec-btn danger" id="btnDeletePersonFromModal" onclick="deleteCurrentPerson()">
+                        🗑️ Obriši osobu
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- In-App Camera Viewfinder Modal -->
+    <div id="cameraModal" class="camera-modal-backdrop">
+        <div class="camera-dialog-card">
+            <div class="camera-dialog-header">
+                <div class="camera-dialog-title">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    <span>Fotoaparat</span>
+                </div>
+                <button type="button" class="camera-dialog-close" onclick="closeLiveCamera()">✕</button>
+            </div>
+            <div class="camera-view-container">
+                <video id="cameraVideo" autoplay playsinline muted></video>
+                <div class="camera-hud-overlay">
+                    <div class="camera-oval-guide">
+                        <div class="hud-corner tl"></div>
+                        <div class="hud-corner tr"></div>
+                        <div class="hud-corner bl"></div>
+                        <div class="hud-corner br"></div>
+                        <span class="hud-guide-text">Centrirajte lice</span>
+                    </div>
+                </div>
+            </div>
+            <div class="camera-dialog-footer">
+                <button type="button" class="cam-aux-btn" id="btnFlipCamera" onclick="flipCameraFacing()" title="Promijeni kameru">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                    </svg>
+                </button>
+                <button type="button" class="cam-capture-btn" id="btnShutterSnap" onclick="takeLiveSnapshot()" title="Snimi fotografiju">
+                    <div class="cam-capture-inner"></div>
+                </button>
+                <button type="button" class="cam-aux-btn" id="btnTorchToggle" onclick="toggleCameraTorch()" title="Bljeskalica">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toastNotification" class="toast" style="display: none;"></div>
+
+    <script src="app.js?v=3.7"></script>
 </body>
 </html>
