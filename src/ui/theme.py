@@ -1210,6 +1210,91 @@ html.light .role-blacklist, body.light .role-blacklist { background: #FEE2E2 !im
         opacity: 1;
     }
 }
+
+/* ============================================================
+   11. CENTERED CONFIRMATION MODALS (OVERLAY & BOX)
+   ============================================================ */
+.cyber-modal-overlay.hide,
+.cyber-modal-overlay[style*="display: none"],
+.cyber-modal-overlay[hidden] {
+    display: none !important;
+}
+
+.cyber-modal-overlay:not(.hide) {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background: rgba(9, 13, 20, 0.76) !important;
+    backdrop-filter: blur(5px) !important;
+    -webkit-backdrop-filter: blur(5px) !important;
+    z-index: 99999 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 20px !important;
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+}
+
+html.light .cyber-modal-overlay:not(.hide),
+body.light .cyber-modal-overlay:not(.hide) {
+    background: rgba(15, 23, 42, 0.55) !important;
+}
+
+.cyber-modal-overlay:not(.hide) > div:not(.cyber-modal-box) {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.cyber-modal-box {
+    background: var(--ind-card) !important;
+    background-color: var(--ind-card) !important;
+    border: 1px solid var(--ind-border) !important;
+    border-top: 3px solid #EF4444 !important;
+    border-radius: 10px !important;
+    padding: 22px 24px !important;
+    width: 100% !important;
+    max-width: 560px !important;
+    max-height: 88vh !important;
+    margin: auto !important;
+    overflow-y: auto !important;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5) !important;
+    animation: modalPopIn 0.16s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes modalPopIn {
+    0% {
+        opacity: 0;
+        transform: scale(0.95) translateY(8px);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.danger-zone-accordion {
+    border: 1px solid rgba(239, 68, 68, 0.35) !important;
+}
+
+.batch-delete-tray {
+    background: var(--ind-card) !important;
+    border: 1px solid rgba(239, 68, 68, 0.4) !important;
+    border-radius: 6px !important;
+    padding: 10px 12px !important;
+    margin-bottom: 10px !important;
+}
 """
 
 HEAD_THEME_JS = """

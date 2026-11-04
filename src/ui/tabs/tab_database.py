@@ -751,10 +751,27 @@ def on_table_search_clear():
     choices = get_person_dropdown_choices("")
     return "", rows, stats, gr.update(choices=choices, value=None)
 
+def handle_open_single_person_delete_modal(selected_person_str):
+    person_id = parse_person_id(selected_person_str)
+    if person_id is None:
+        return gr.update(visible=False), "", "⚠️ Niste odabrali osobu za brisanje."
+    p = db.get_person(person_id)
+    if not p:
+        return gr.update(visible=False), "", "⚠️ Odabrana osoba ne postoji u bazi."
+    summary = (
+        f"Odabrana osoba za trajno brisanje: **{p['name']}** (ID: `{person_id}`, "
+        f"Uloga: {format_role_badge(p.get('role', 'standard'))}, "
+        f"Broj uzoraka: **{p.get('sample_count', 0)}**)"
+    )
+    return gr.update(visible=True), summary, ""
+
+def handle_close_single_person_delete_modal():
+    return gr.update(visible=False)
+
 def delete_selected_person(selected_person_str):
     person_id = parse_person_id(selected_person_str)
     if person_id is None:
-        return "⚠️ Niste odabrali osobu.", gr.update(), gr.update(), gr.update(), gr.update(), [], "", "", "", ""
+        return gr.update(visible=False), "⚠️ Niste odabrali osobu.", gr.update(), gr.update(), gr.update(), gr.update(), [], "", "", "", "", gr.update()
         
     p = db.get_person(person_id)
     if p:
@@ -765,7 +782,8 @@ def delete_selected_person(selected_person_str):
         
     choices = get_person_dropdown_choices()
     table_view, stats_view = refresh_database_view()
-    return msg, gr.update(choices=choices, value=None), gr.update(choices=choices, value=None), table_view, stats_view, [], "", "", "", ""
+    empty_avatar = render_person_avatar_html(None)
+    return gr.update(visible=False), msg, gr.update(choices=choices, value=None), gr.update(choices=choices, value=None), table_view, stats_view, [], "", "", "", "", empty_avatar
 
 def update_person_handler(selected_person_str, new_name, new_notes, new_role="standard"):
     person_id = parse_person_id(selected_person_str)
@@ -1323,6 +1341,24 @@ def create_tab_database():
                     btn_cancel_batch_delete = gr.Button("✖️ Odustani / Zatvori", variant="secondary", scale=1)
                     btn_confirm_batch_delete = gr.Button("🔥 Potvrdi i obriši", variant="stop", elem_classes=["btn-cyber-danger"], scale=1)
 
+        # ---------------- SKOČNI PROZOR (MODAL) ZA POTVRDU BRISANJA POJEDINAČNE OSOBE ----------------
+        with gr.Group(visible=False, elem_classes=["cyber-modal-overlay"]) as single_person_delete_modal:
+            with gr.Group(elem_classes=["cyber-modal-box"]):
+                gr.Markdown(
+                    """
+                    ## 🗑️ POTVRDA BRISANJA OSOBE
+                    ---
+                    **Jeste li sigurni da želite trajno obrisati odabranu osobu iz baze podataka?**
+                
+                    * ⚠️ Ova radnja je nepovratna i uklanja profil te sve uzorke lica ove osobe.
+                    * 🧬 Svi pripadajući biometrijski vektori i izrezi lica bit će obrisani s diska.
+                    """
+                )
+                single_person_delete_summary = gr.Markdown("")
+                with gr.Row():
+                    btn_cancel_single_person_delete = gr.Button("✖️ Odustani / Zatvori", variant="secondary", scale=1)
+                    btn_confirm_single_person_delete = gr.Button("🔥 Potvrdi i obriši osobu", variant="stop", elem_classes=["btn-cyber-danger"], scale=1)
+
     # ------------------ TAB 3: SPREMLJENI KADROVI & VIDEO SNIMKE ------------------
 
     return {
@@ -1382,6 +1418,10 @@ def create_tab_database():
         "batch_delete_modal_summary": batch_delete_modal_summary,
         "btn_cancel_batch_delete": btn_cancel_batch_delete,
         "btn_confirm_batch_delete": btn_confirm_batch_delete,
+        "single_person_delete_modal": single_person_delete_modal,
+        "single_person_delete_summary": single_person_delete_summary,
+        "btn_cancel_single_person_delete": btn_cancel_single_person_delete,
+        "btn_confirm_single_person_delete": btn_confirm_single_person_delete,
     }
 
 def wire_tab_database_events(c):
@@ -1628,9 +1668,25 @@ def wire_tab_database_events(c):
     )
 
     c['btn_delete_person'].click(
+        fn=handle_open_single_person_delete_modal,
+        inputs=[c['manage_person_dropdown']],
+        outputs=[
+            c['single_person_delete_modal'],
+            c['single_person_delete_summary'],
+            c['sample_action_status']
+        ]
+    )
+
+    c['btn_cancel_single_person_delete'].click(
+        fn=handle_close_single_person_delete_modal,
+        outputs=[c['single_person_delete_modal']]
+    )
+
+    c['btn_confirm_single_person_delete'].click(
         fn=delete_selected_person,
         inputs=[c['manage_person_dropdown']],
         outputs=[
+            c['single_person_delete_modal'],
             c['sample_action_status'],
             c['manage_person_dropdown'],
             c['existing_person_picker'],
@@ -1640,7 +1696,8 @@ def wire_tab_database_events(c):
             c['person_info_md'],
             c['edit_person_name'],
             c['edit_person_notes'],
-            c['edit_person_status']
+            c['edit_person_status'],
+            c['selected_person_avatar']
         ]
     ).then(
         fn=get_header_bar_html,

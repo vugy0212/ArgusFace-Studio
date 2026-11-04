@@ -114,10 +114,13 @@ def on_recognition_gallery_click(evt: gr.SelectData, rec_faces):
         r = faces[evt.index]
         face_choice = f"[#{r['index']}] {r['best_name']} ({r['similarity']})"
         default_name = r["best_name"] if r["best_name"] != "Nepoznato" else ""
-        return gr.update(value=face_choice), gr.update(value=default_name)
-    return gr.update(), gr.update()
+        if default_name:
+            info = db.get_person_info(default_name)
+            return gr.update(value=face_choice), gr.update(value=default_name), gr.update(value=info.get("role", "standard")), gr.update(value=info.get("notes", ""))
+        return gr.update(value=face_choice), gr.update(value=""), gr.update(value="standard"), gr.update(value="")
+    return gr.update(), gr.update(), gr.update(), gr.update()
 
-def quick_add_face_to_db(selected_face_str, new_name, rec_faces):
+def quick_add_face_to_db(selected_face_str, new_name, new_role, new_notes, rec_faces):
     if not selected_face_str:
         return "⚠️ Niste odabrali lice sa slike.", gr.update(), gr.update(), gr.update(), gr.update()
     if not new_name or not new_name.strip():
@@ -136,9 +139,18 @@ def quick_add_face_to_db(selected_face_str, new_name, rec_faces):
         return f"❌ Pogrešan format odabira ({e})", gr.update(), gr.update(), gr.update(), gr.update()
         
     person_name = re.sub(r'[\r\n\t\x00-\x1f]', '', str(new_name or "")).strip()[:100]
+    person_notes = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(new_notes or "")).strip()[:500]
+    role_clean = (new_role or "standard").strip().lower()
     if not person_name:
         return "⚠️ Molimo unesite valjano ime osobe.", gr.update(), gr.update(), gr.update(), gr.update()
-    person_id = db.get_or_create_person(person_name)
+    person_id = db.get_or_create_person(person_name, notes=person_notes, role=role_clean)
+    existing_p = db.get_person(person_id)
+    if existing_p:
+        updated_notes = person_notes if person_notes else (existing_p.get("notes") or "")
+        updated_role = role_clean if role_clean != "standard" else (existing_p.get("role") or "standard")
+        if updated_notes != (existing_p.get("notes") or "") or updated_role != (existing_p.get("role") or "standard"):
+            db.update_person(person_id, existing_p["name"], updated_notes, role=updated_role)
+            role_clean = updated_role
     
     crop_filename = f"crop_{person_id}_{uuid.uuid4().hex[:8]}.jpg"
     crop_path = os.path.join(CROPS_DIR, crop_filename)
@@ -146,7 +158,9 @@ def quick_add_face_to_db(selected_face_str, new_name, rec_faces):
     
     db.add_face_sample(person_id, crop_path, crop_path, target_face["embedding"])
     
-    msg = f"✅ Lice [#{f_num}] uspješno dodano osobi **{person_name}** u bazu podataka!"
+    role_labels = {"vip": "⭐ VIP", "blacklist": "🚨 Crna lista", "standard": "👤 Standard"}
+    role_badge = role_labels.get(role_clean, "👤 Standard")
+    msg = f"✅ Lice [#{f_num}] uspješno dodano osobi **{person_name}** ({role_badge}) u bazu podataka!"
     choices = get_person_dropdown_choices()
     table_view, stats_view = refresh_database_view()
     samples = db.get_person_samples(person_id)
@@ -385,12 +399,13 @@ def create_tab_live(rec_faces_state):
     with gr.TabItem("Pretraživanje"):
         with gr.Row(equal_height=False):
             with gr.Column(scale=4, min_width=320, elem_classes=["cyber-card"]):
+                gr.Markdown("#### 🖼️ Analiza pojedinačne fotografije")
                 input_img = gr.Image(
                     type="pil",
                     label="Učitaj sliku ili snimi web kamerom",
                     sources=["upload", "webcam"]
                 )
-                with gr.Accordion("⚙️ Napredne postavke analize", open=False, elem_classes=["cyber-accordion"]):
+                with gr.Accordion("⚙️ Napredne postavke analize slike", open=False, elem_classes=["cyber-accordion"]):
                     threshold_slider = gr.Slider(
                         minimum=0.0,
                         maximum=1.0,
@@ -416,9 +431,10 @@ def create_tab_live(rec_faces_state):
                         elem_classes=["blur-mode-group"]
                     )
                 with gr.Row():
-                    btn_recognize = gr.Button("Pokreni analizu", variant="primary", scale=2, elem_classes=["btn-industrial-primary"])
+                    btn_recognize = gr.Button("🔍 Pokreni analizu", variant="primary", scale=2, elem_classes=["btn-industrial-primary"])
                     
-                with gr.Accordion("📹 IZVORI: Live Nadzor i Kamere (Web kamera, IP, RTSP / Pojedinačna ili 2×2 Mreža)", open=False, elem_classes=["cyber-accordion"]):
+                gr.Markdown("---\n#### 📹 Live Nadzor i Video Stream")
+                with gr.Accordion("⚙️ Izvor kamere / videa (Web kamera, IP/RTSP, Video, 2×2 Mreža)", open=False, elem_classes=["cyber-accordion"]):
                     live_mode_radio = gr.Radio(
                         choices=["Pojedinačna kamera (Single View)", "Mreža više kamera (2×2 Grid)"],
                         value="Pojedinačna kamera (Single View)",
@@ -491,10 +507,11 @@ def create_tab_live(rec_faces_state):
                             mc_c4_name = gr.Textbox(value="Kamera 4", label="Naziv Kamere 4", scale=2)
                             mc_c4_src = gr.Textbox(value="", placeholder="Opcionalno: RTSP ili USB indeks", label="Izvor", scale=3)
 
+                gr.Markdown("*Opcije aktivne kamere i NVR nadzora:*")
                 with gr.Row():
                     cam_enable_log = gr.Checkbox(
                         value=False,
-                        label="Evidencija prolazaka",
+                        label="📋 Evidencija prolazaka (Dnevnik)",
                         scale=2
                     )
                     cam_cooldown_sec = gr.Slider(
@@ -510,7 +527,7 @@ def create_tab_live(rec_faces_state):
                 with gr.Row():
                     cam_enable_nvr = gr.Checkbox(
                         value=False,
-                        label="24/7 NVR snimanje",
+                        label="🔴 24/7 NVR snimanje",
                         scale=2
                     )
                     cam_nvr_segment_min = gr.Slider(
@@ -526,14 +543,14 @@ def create_tab_live(rec_faces_state):
                 with gr.Row():
                     cam_enable_spoof = gr.Checkbox(
                         value=True,
-                        label="Anti-spoofing zaštita",
+                        label="🛡️ Anti-spoofing zaštita (uživo)",
                         scale=2
                     )
 
                 with gr.Row():
-                    btn_launch_live = gr.Button("Pokreni Live Kameru", variant="primary", scale=2, elem_classes=["btn-industrial-primary"])
-                    btn_launch_grid = gr.Button("Pokreni 2×2 Mrežu", variant="primary", scale=2, visible=False, elem_classes=["btn-industrial-primary"])
-                    btn_open_snaps_quick = gr.Button("Snimke", variant="secondary", scale=1, elem_classes=["btn-industrial-secondary"])
+                    btn_launch_live = gr.Button("🎥 Pokreni Live Kameru", variant="primary", scale=2, elem_classes=["btn-industrial-primary"])
+                    btn_launch_grid = gr.Button("🎛️ Pokreni 2×2 Mrežu", variant="primary", scale=2, visible=False, elem_classes=["btn-industrial-primary"])
+                    btn_open_snaps_quick = gr.Button("📁 Snimke", variant="secondary", scale=1, elem_classes=["btn-industrial-secondary"])
 
             
             # 2. Srednji stupac: Vizualni rezultat (cca 42% širine)
@@ -544,7 +561,7 @@ def create_tab_live(rec_faces_state):
                     elem_classes=["cyber-preview-frame"]
                 )
                 rec_status_md = gr.Markdown(
-                    "Učitajte sliku i kliknite 'Pokreni prepoznavanje'.",
+                    "Učitajte sliku i kliknite 'Pokreni analizu'.",
                     elem_classes=["cyber-status-text"]
                 )
 
@@ -589,16 +606,33 @@ def create_tab_live(rec_faces_state):
                     allow_preview=False
                 )
             with gr.Column(scale=1, elem_classes=["cyber-card"]):
-                gr.Markdown("### ➕ Brzi unos nepoznate osobe u bazu")
-                gr.Markdown("Kliknite na lice u galeriji s lijeve strane ili odaberite iz padajućeg izbornika:")
+                gr.Markdown("### ➕ Brzi unos detektiranog lica u bazu")
+                gr.Markdown("Kliknite na lice u galeriji s lijeve strane ili ga odaberite iz padajućeg izbornika:")
                 with gr.Row():
                     unknown_face_dropdown = gr.Dropdown(
                         label="Odaberite detektirano lice sa slike",
                         choices=[],
-                        allow_custom_value=True
+                        allow_custom_value=True,
+                        scale=1
                     )
-                    quick_name_input = gr.Textbox(label="Ime osobe", placeholder="npr. Marko Horvat")
-                btn_quick_add = gr.Button("Spremi ovo lice u bazu za tu osobu", variant="secondary", elem_classes=["btn-cyber-primary"])
+                    quick_name_input = gr.Textbox(label="Ime i prezime osobe", placeholder="npr. Marko Horvat", scale=1)
+                with gr.Row():
+                    quick_role_input = gr.Dropdown(
+                        label="Sigurnosni status / Uloga",
+                        choices=[
+                            ("Standardna osoba / Korisnik", "standard"),
+                            ("⭐ VIP uzvanik / Važna osoba", "vip"),
+                            ("🚨 Crna lista / Nepoželjni (Zabrana)", "blacklist")
+                        ],
+                        value="standard",
+                        scale=1
+                    )
+                    quick_notes_input = gr.Textbox(
+                        label="Bilješka (opcionalno)",
+                        placeholder="npr. Posjetitelj, Odjel prodaje...",
+                        scale=1
+                    )
+                btn_quick_add = gr.Button("💾 Spremi ovo lice u bazu za tu osobu", variant="secondary", elem_classes=["btn-cyber-primary"])
                 quick_add_status = gr.Markdown("")
 
     # ------------------ TAB 2: UPRAVLJANJE BAZOM ------------------
@@ -638,6 +672,8 @@ def create_tab_live(rec_faces_state):
         "rec_status_md": rec_status_md,
         "unknown_face_dropdown": unknown_face_dropdown,
         "quick_name_input": quick_name_input,
+        "quick_role_input": quick_role_input,
+        "quick_notes_input": quick_notes_input,
         "btn_quick_add": btn_quick_add,
         "quick_add_status": quick_add_status,
     }
@@ -732,12 +768,12 @@ def wire_tab_live_events(c):
     c['crops_gallery_out'].select(
         fn=on_recognition_gallery_click,
         inputs=[c['rec_faces_state']],
-        outputs=[c['unknown_face_dropdown'], c['quick_name_input']]
+        outputs=[c['unknown_face_dropdown'], c['quick_name_input'], c['quick_role_input'], c['quick_notes_input']]
     )
 
     c['btn_quick_add'].click(
         fn=quick_add_face_to_db,
-        inputs=[c['unknown_face_dropdown'], c['quick_name_input'], c['rec_faces_state']],
+        inputs=[c['unknown_face_dropdown'], c['quick_name_input'], c['quick_role_input'], c['quick_notes_input'], c['rec_faces_state']],
         outputs=[c['quick_add_status'], c['manage_person_dropdown'], c['existing_person_picker'], c['db_table'], c['db_stats_md']]
     ).then(
         fn=get_header_bar_html,
