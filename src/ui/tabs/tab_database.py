@@ -312,7 +312,7 @@ def on_single_image_click(evt: gr.SelectData, state):
         pass
     return gr.update(), gr.update(), gr.update(), gr.update(), state
 
-def save_single_person(name, notes, face_choice_str, role, state):
+def save_single_person(name, notes, face_choice_str, role, state, selected_person_str=None):
     state = _get_single_state(state)
     faces = state["faces"]
     bgr = state["bgr"]
@@ -329,8 +329,64 @@ def save_single_person(name, notes, face_choice_str, role, state):
             gr.update(), gr.update()
         )
     if not faces:
+        sel_pid = parse_person_id(selected_person_str)
+        if sel_pid is not None:
+            person_name = re.sub(r'[\r\n\t\x00-\x1f]', '', str(name or "")).strip()[:100]
+            person_notes = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(notes or "")).strip()[:500]
+            person_role = (role or "standard").strip().lower()
+            if not person_name:
+                return (
+                    "⚠️ Ime osobe ne smije biti prazno!",
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(),
+                    state,
+                    gr.update(), gr.update()
+                )
+            try:
+                db.update_person(sel_pid, person_name, person_notes, role=person_role)
+            except Exception as e:
+                return (
+                    f"⚠️ Greška pri ažuriranju osobe: {e}",
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    gr.update(), gr.update(), gr.update(),
+                    state,
+                    gr.update(), gr.update()
+                )
+            updated_p = db.get_person(sel_pid)
+            sample_count = updated_p["sample_count"] if updated_p else 0
+            choice_str = f"{sel_pid}: {person_name} ({sample_count} slika)"
+            choices_db = get_person_dropdown_choices()
+            table_view, stats_view = refresh_database_view()
+            avatar_html = render_person_avatar_html(sel_pid)
+            btn_text = f"💾 Spremi izmjene / novo lice za: {person_name}"
+            msg = f"✅ **Podaci su ažurirani:** Izmjene za osobu **{person_name}** ({format_role_badge(person_role)}) su uspješno spremljene! *(Za dodavanje novog uzorka lica učitajte sliku iznad.)*"
+            return (
+                msg,
+                gr.update(choices=choices_db, value=choice_str),
+                gr.update(choices=choices_db, value=choice_str),
+                table_view,
+                stats_view,
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                person_name,
+                person_notes,
+                btn_text,
+                avatar_html,
+                person_name,
+                person_notes,
+                gr.update(),
+                state,
+                person_role,
+                person_role
+            )
         return (
-            "⚠️ Niste učitali sliku ili na slici nema lica!",
+            "⚠️ Za unos nove osobe najprije učitajte sliku (ili odaberite postojeću osobu iz tablice za uređivanje podataka)!",
             gr.update(), gr.update(), gr.update(), gr.update(),
             gr.update(), gr.update(), gr.update(), gr.update(),
             gr.update(), gr.update(), gr.update(), gr.update(),
@@ -368,11 +424,19 @@ def save_single_person(name, notes, face_choice_str, role, state):
             gr.update(), gr.update()
         )
     person_role = (role or "standard").strip().lower()
-    person_id = db.get_or_create_person(person_name, person_notes, role=person_role)
-    try:
-        db.update_person(person_id, person_name, person_notes, role=person_role)
-    except Exception:
-        pass
+    sel_pid = parse_person_id(selected_person_str)
+    if sel_pid is not None and db.get_person(sel_pid):
+        person_id = sel_pid
+        try:
+            db.update_person(person_id, person_name, person_notes, role=person_role)
+        except Exception:
+            person_id = db.get_or_create_person(person_name, person_notes, role=person_role)
+    else:
+        person_id = db.get_or_create_person(person_name, person_notes, role=person_role)
+        try:
+            db.update_person(person_id, person_name, person_notes, role=person_role)
+        except Exception:
+            pass
     
     orig_img_to_save = bgr if bgr is not None else target_face["crop_bgr"]
     orig_path = save_image_dedup(orig_img_to_save, UPLOADS_DIR, prefix="orig")
@@ -678,8 +742,8 @@ def on_table_select(table_data, is_multi_mode, current_batch, evt: gr.SelectData
     name_val = p["name"]
     notes_val = p["notes"] or ""
     role_val = p.get("role", "standard")
-    btn_text = f"💾 Spremi dodatno lice za: {p['name']}"
-    status_msg = f"📌 Odabrano za unos novih slika: **{p['name']}** ({p['sample_count']} slika, {format_role_badge(role_val)}). Učitajte sliku i kliknite Spremi."
+    btn_text = f"💾 Spremi izmjene / novo lice za: {p['name']}"
+    status_msg = f"📌 Odabrana osoba: **{p['name']}** ({p['sample_count']} slika, {format_role_badge(role_val)}). Možete odmah urediti podatke ili učitati novu sliku i kliknuti Spremi."
     
     return (
         choice, gallery, info, sample_drop,
@@ -715,8 +779,8 @@ def on_existing_person_picked(selected_choice):
     name_val = p["name"]
     notes_val = p["notes"] or ""
     role_val = p.get("role", "standard")
-    btn_text = f"💾 Spremi dodatno lice za: {p['name']}"
-    status_msg = f"📌 Odabrano za unos novih slika: **{p['name']}** ({p['sample_count']} slika, {format_role_badge(role_val)}). Učitajte sliku i kliknite Spremi."
+    btn_text = f"💾 Spremi izmjene / novo lice za: {p['name']}"
+    status_msg = f"📌 Odabrana osoba: **{p['name']}** ({p['sample_count']} slika, {format_role_badge(role_val)}). Možete odmah urediti podatke ili učitati novu sliku i kliknuti Spremi."
     choice_str = f"{p['id']}: {p['name']} ({p['sample_count']} slika)"
     gallery, info, sample_drop = view_person_details(choice_str)
     avatar_html = render_person_avatar_html(p["id"])
@@ -732,14 +796,29 @@ def on_existing_person_picked(selected_choice):
 def on_manage_person_change(selected_person_str):
     person_id = parse_person_id(selected_person_str)
     if person_id is None:
-        return [], "Kliknite na osobu u tablici ili je pretražite iznad.", gr.update(choices=[], value=None), "", "", "", "standard"
+        return (
+            [], "Kliknite na osobu u tablici ili je pretražite iznad.", gr.update(choices=[], value=None),
+            "", "", "", "standard",
+            gr.update(), render_person_avatar_html(None), "", "", "standard", "💾 Spremi odabrano lice u bazu"
+        )
         
     p = db.get_person(person_id)
     if not p:
-        return [], "Osoba nije pronađena u bazi.", gr.update(choices=[], value=None), "", "", "", "standard"
+        return (
+            [], "Osoba nije pronađena u bazi.", gr.update(choices=[], value=None),
+            "", "", "", "standard",
+            gr.update(), render_person_avatar_html(None), "", "", "standard", "💾 Spremi odabrano lice u bazu"
+        )
         
     gallery, info, sample_drop = view_person_details(selected_person_str)
-    return gallery, info, sample_drop, p["name"], p["notes"] or "", "", p.get("role", "standard")
+    role_val = p.get("role", "standard")
+    avatar_html = render_person_avatar_html(person_id)
+    btn_text = f"💾 Spremi izmjene / novo lice za: {p['name']}"
+    return (
+        gallery, info, sample_drop,
+        p["name"], p["notes"] or "", "", role_val,
+        gr.update(value=selected_person_str), avatar_html, p["name"], p["notes"] or "", role_val, btn_text
+    )
 
 def on_table_search_changed(search_query):
     rows, stats = refresh_database_view(search_query)
@@ -1084,7 +1163,7 @@ def create_tab_database():
                                 placeholder="Upišite novo ime ili odaberite osobu iznad",
                                 scale=3
                             )
-                            btn_clear_form = gr.Button("🔄 Očisti", size="sm", scale=1, elem_classes=["btn-cyber-secondary"])
+                            btn_clear_form = gr.Button("➕ Nova osoba / Očisti", size="sm", scale=1, elem_classes=["btn-cyber-secondary"])
                         
                         single_notes_input = gr.Textbox(label="Bilješke (opcionalno)", placeholder="npr. Član tima, IT odjel")
                         single_role_input = gr.Dropdown(
@@ -1465,7 +1544,7 @@ def wire_tab_database_events(c):
 
     c['btn_save_single'].click(
         fn=save_single_person,
-        inputs=[c['single_name_input'], c['single_notes_input'], c['single_face_selector'], c['single_role_input'], c['single_enroll_state']],
+        inputs=[c['single_name_input'], c['single_notes_input'], c['single_face_selector'], c['single_role_input'], c['single_enroll_state'], c['existing_person_picker']],
         outputs=[
             c['single_save_status'],
             c['manage_person_dropdown'],
@@ -1634,7 +1713,12 @@ def wire_tab_database_events(c):
     c['manage_person_dropdown'].change(
         fn=on_manage_person_change,
         inputs=[c['manage_person_dropdown']],
-        outputs=[c['person_gallery'], c['person_info_md'], c['sample_delete_dropdown'], c['edit_person_name'], c['edit_person_notes'], c['edit_person_status'], c['edit_person_role']]
+        outputs=[
+            c['person_gallery'], c['person_info_md'], c['sample_delete_dropdown'],
+            c['edit_person_name'], c['edit_person_notes'], c['edit_person_status'], c['edit_person_role'],
+            c['existing_person_picker'], c['selected_person_avatar'], c['single_name_input'], c['single_notes_input'], c['single_role_input'], c['btn_save_single']
+        ],
+        show_progress="hidden"
     )
 
     c['btn_save_person_edit'].click(
