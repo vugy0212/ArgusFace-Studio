@@ -264,7 +264,7 @@ def handle_test_email(host, port, enc_mode, sender, password, recipients):
 
 
 def create_tab_settings():
-    with gr.TabItem("ℹ️ O Sustavu i Sigurnosna Kopija"):
+    with gr.TabItem("Postavke i Sustav"):
         with gr.Row():
             with gr.Column(scale=1):
                 hw_accel_badge = gr.HTML(hardware.get_hardware_acceleration_badge_html())

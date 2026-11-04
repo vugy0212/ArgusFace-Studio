@@ -38,11 +38,20 @@ def get_snapshots_ui_data():
 def on_snapshot_gallery_select(evt: gr.SelectData):
     snaps = config.get_saved_snapshots()
     idx = evt.index
-    if 0 <= idx < len(snaps):
+    if idx is not None and 0 <= idx < len(snaps):
         s = snaps[idx]
         desc = f"📸 **Datoteka:** `{s['filename']}`\n\n🕒 **Vrijeme snimanja:** {s['time_str']} &nbsp;|&nbsp; 💾 **Veličina:** {s['size_kb']} KB\n\n📍 **Puna putanja:** `{s['path']}`"
         return s["path"], desc, gr.update(value=s["filename"])
-    return None, "", gr.update()
+    return gr.update(), gr.update(), gr.update()
+
+def on_snapshot_table_select(evt: gr.SelectData):
+    snaps = config.get_saved_snapshots()
+    row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+    if row_idx is not None and 0 <= row_idx < len(snaps):
+        s = snaps[row_idx]
+        desc = f"📸 **Datoteka:** `{s['filename']}`\n\n🕒 **Vrijeme snimanja:** {s['time_str']} &nbsp;|&nbsp; 💾 **Veličina:** {s['size_kb']} KB\n\n📍 **Puna putanja:** `{s['path']}`"
+        return s["path"], desc, gr.update(value=s["filename"])
+    return gr.update(), gr.update(), gr.update()
 
 def on_snapshot_dropdown_change(filename):
     if not filename:
@@ -87,11 +96,11 @@ def on_reset_snapshot_dir_click():
 
 def on_send_snapshot_to_recognition(filename, threshold, landmarks, blur_mode, show_all_faces=False):
     if not filename:
-        return None, None, [], None, "⚠️ Nema odabrane snimke za analizu.", gr.update(choices=[]), [], generate_detection_cards_html([], show_all_faces=show_all_faces), "⚠️ Nema odabrane snimke."
+        return None, None, [], None, "⚠️ Nema odabrane snimke za analizu.", gr.update(choices=[]), [], generate_detection_cards_html([], show_all_faces=show_all_faces), "⚠️ Nema odabrane snimke.", gr.update()
     snap_dir = config.get_snapshot_dir()
     path = os.path.join(snap_dir, filename)
     if not os.path.isfile(path):
-        return None, None, [], None, "⚠️ Datoteka nije pronađena.", gr.update(choices=[]), [], generate_detection_cards_html([], show_all_faces=show_all_faces), "⚠️ Datoteka nije pronađena."
+        return None, None, [], None, "⚠️ Datoteka nije pronađena.", gr.update(choices=[]), [], generate_detection_cards_html([], show_all_faces=show_all_faces), "⚠️ Datoteka nije pronađena.", gr.update()
     
     blur_unknown = blur_mode == "🔒 Zamuti nepoznata lica"
     blur_all     = blur_mode == "🛡️ Zamuti sva lica (GDPR)"
@@ -99,8 +108,8 @@ def on_send_snapshot_to_recognition(filename, threshold, landmarks, blur_mode, s
     annotated_out, crops_gallery_out, results_table, rec_status_md, unknown_face_dropdown, rec_faces_state, cards_html = recognize_faces(
         pil_img, threshold, landmarks, blur_unknown, blur_all=blur_all, show_all_faces=show_all_faces
     )
-    msg = f"✅ Kadar `{filename}` je prebačen u Tab 1 i analiziran!"
-    return pil_img, annotated_out, crops_gallery_out, results_table, rec_status_md, unknown_face_dropdown, rec_faces_state, cards_html, msg
+    msg = f"✅ Kadar `{filename}` je prebačen u karticu Pretraživanje i analiziran!"
+    return pil_img, annotated_out, crops_gallery_out, results_table, rec_status_md, unknown_face_dropdown, rec_faces_state, cards_html, msg, gr.update(selected="tab_live")
 
 # ---------------- DETECTION EVENT LOG HELPERS ----------------
 
@@ -176,7 +185,7 @@ def handle_delete_nvr_segment(video_path):
 
 
 def create_tab_media():
-    with gr.TabItem("📁 Spremljeni Kadrovi i Video Snimke") as tab_saved_media:
+    with gr.TabItem("Snimke i Kadrovi") as tab_saved_media:
         with gr.Tabs(overflow_behavior="wrap"):
             # POD-TAB 1: SLIKE KADROVA (SNAPSHOTS)
             with gr.TabItem("🖼️ Slike Kadrova (Snapshots)"):
@@ -202,7 +211,7 @@ def create_tab_media():
                             value=snap_init_g
                         )
                     
-                        gr.Markdown("### 📋 Popis datoteka na disku")
+                        gr.Markdown("### 📋 Popis datoteka na disku *(kliknite redak za odabir)*")
                         snapshots_table = gr.Dataframe(
                             headers=["Naziv datoteke", "Datum i vrijeme snimanja", "Veličina"],
                             label="Popis snimaka",
@@ -334,6 +343,12 @@ def wire_tab_media_events(c):
         outputs=[c['selected_snap_preview'], c['selected_snap_info'], c['selected_snap_dropdown']]
     )
 
+    c['snapshots_table'].select(
+        fn=on_snapshot_table_select,
+        outputs=[c['selected_snap_preview'], c['selected_snap_info'], c['selected_snap_dropdown']],
+        show_progress="hidden"
+    )
+
     c['selected_snap_dropdown'].change(
         fn=on_snapshot_dropdown_change,
         inputs=[c['selected_snap_dropdown']],
@@ -360,7 +375,7 @@ def wire_tab_media_events(c):
     c['btn_send_to_rec'].click(
         fn=on_send_snapshot_to_recognition,
         inputs=[c['selected_snap_dropdown'], c['threshold_slider'], c['landmarks_chk'], c['blur_mode_radio'], c['cards_show_all_chk']],
-        outputs=[c['input_img'], c['annotated_out'], c['crops_gallery_out'], c['results_table'], c['rec_status_md'], c['unknown_face_dropdown'], c['rec_faces_state'], c['detection_cards_html'], c['snap_action_status']]
+        outputs=[c['input_img'], c['annotated_out'], c['crops_gallery_out'], c['results_table'], c['rec_status_md'], c['unknown_face_dropdown'], c['rec_faces_state'], c['detection_cards_html'], c['snap_action_status'], c['main_tabs']]
     )
 
     c['nvr_archive_table'].select(

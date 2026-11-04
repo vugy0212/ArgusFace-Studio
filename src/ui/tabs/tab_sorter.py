@@ -382,7 +382,7 @@ def handle_open_sorter_folder(folder_path: str):
 
 
 def create_tab_sorter():
-    with gr.TabItem("📸 Pametni Sorter Fotografija") as tab_photo_sorter:
+    with gr.TabItem("Sorter Fotografija") as tab_photo_sorter:
         gr.Markdown(
             """
             ## 📸 Pametni Sorter Fotografija — Automatsko razvrstavanje po osobama
