@@ -382,7 +382,7 @@ def on_cam_source_change(st):
 
 
 def create_tab_live(rec_faces_state):
-    with gr.TabItem("Live Feed"):
+    with gr.TabItem("Pretraživanje"):
         with gr.Row(equal_height=False):
             with gr.Column(scale=4, min_width=320, elem_classes=["cyber-card"]):
                 input_img = gr.Image(
